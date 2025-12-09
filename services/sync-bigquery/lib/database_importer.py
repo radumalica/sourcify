@@ -160,6 +160,34 @@ class DatabaseImporter:
                 # Replace NaT with None
                 df[col] = df[col].replace({pd.NaT: None})
         
+        # Filter out rows with NULL values in NOT NULL columns
+        # Based on PostgreSQL schema constraints
+        not_null_columns_by_table = {
+            'code': ['code_hash', 'code_hash_keccak'],
+            'sources': ['source_hash', 'source_hash_keccak', 'content'],
+            'contracts': ['creation_code_hash', 'runtime_code_hash'],
+            'compiled_contracts': ['compiler', 'version', 'language', 'name', 'fully_qualified_name',
+                                  'compiler_settings', 'compilation_artifacts', 'creation_code_hash',
+                                  'creation_code_artifacts', 'runtime_code_hash', 'runtime_code_artifacts'],
+            'compiled_contracts_sources': ['compilation_id', 'source_hash', 'path'],
+            'contract_deployments': ['chain_id', 'address', 'transaction_hash', 'block_number',
+                                    'transaction_index', 'deployer', 'contract_id'],
+            'verified_contracts': ['deployment_id', 'compilation_id', 'creation_match', 'runtime_match'],
+        }
+        
+        if table_name in not_null_columns_by_table:
+            required_cols = [col for col in not_null_columns_by_table[table_name] if col in columns]
+            if required_cols:
+                initial_count = len(df)
+                df = df.dropna(subset=required_cols)
+                dropped_count = initial_count - len(df)
+                if dropped_count > 0:
+                    logger.warning(
+                        f"Dropped {dropped_count} rows from {table_name} due to NULL values in required columns: "
+                        f"{', '.join(required_cols)}"
+                    )
+                total_rows = len(df)
+        
         # Process in batches
         for i in range(0, total_rows, batch_size):
             batch_df = df.iloc[i:i + batch_size]
