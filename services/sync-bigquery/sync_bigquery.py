@@ -13,11 +13,7 @@ import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Add parent directory to path to import database_importer from sync service
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'sync'))
-from lib import DatabaseImporter
-
-from lib import BigQueryLoader, StateTracker
+from lib import BigQueryLoader, DatabaseImporter, StateTracker
 
 
 # Configure logging

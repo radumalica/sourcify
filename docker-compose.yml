@@ -136,7 +136,6 @@ services:
       GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
     volumes:
       - ./services/sync-bigquery/logs:/app/logs
-      - ./services/sync/lib:/app/sync_lib
     depends_on:
       db:
         condition: service_healthy
@@ -166,7 +165,6 @@ services:
       GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
     volumes:
       - ./services/sync-bigquery/logs:/app/logs
-      - ./services/sync/lib:/app/sync_lib
     depends_on:
       db:
         condition: service_healthy
