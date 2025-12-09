@@ -43,6 +43,31 @@ class DatabaseImporter:
         """Get the order in which tables should be imported (respects FK dependencies)"""
         return self.import_order
 
+    def _get_table_columns(self, table_name: str) -> List[str]:
+        """
+        Get list of column names for a PostgreSQL table.
+        
+        Args:
+            table_name: Name of the table
+            
+        Returns:
+            List of column names
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = %s
+                ORDER BY ordinal_position
+            """, (table_name,))
+            
+            columns = [row[0] for row in cursor.fetchall()]
+            return columns
+        finally:
+            cursor.close()
+
     def import_dataframe(self, df: pd.DataFrame, table_name: str, batch_size: int = 10000) -> int:
         """
         Import a pandas DataFrame into a PostgreSQL table.
@@ -62,8 +87,20 @@ class DatabaseImporter:
         total_imported = 0
         total_rows = len(df)
         
-        # Convert DataFrame to list of tuples
-        columns = df.columns.tolist()
+        # Get actual columns from PostgreSQL table
+        pg_columns = self._get_table_columns(table_name)
+        
+        # Filter DataFrame to only include columns that exist in PostgreSQL
+        df_columns = df.columns.tolist()
+        columns_to_import = [col for col in df_columns if col in pg_columns]
+        columns_to_skip = [col for col in df_columns if col not in pg_columns]
+        
+        if columns_to_skip:
+            logger.info(f"Skipping columns not in PostgreSQL table {table_name}: {', '.join(columns_to_skip)}")
+        
+        # Filter DataFrame
+        df = df[columns_to_import].copy()
+        columns = columns_to_import
         
         # Handle special data types for PostgreSQL
         import json
