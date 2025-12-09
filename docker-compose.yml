@@ -11,7 +11,6 @@ services:
             rm -rf /var/lib/apt/lists/*
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - parquet_cache:/parquet_cache
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sourcify}
       POSTGRES_USER: ${POSTGRES_USER:-sourcify}
@@ -121,10 +120,10 @@ services:
     networks:
       - sourcify-network
 
-  # Parquet sync service (manual execution via docker compose run sync)
-  sync:
+  # BigQuery sync service (manual execution via docker compose run sync-bigquery)
+  sync-bigquery:
     build:
-      context: ./services/sync
+      context: ./services/sync-bigquery
       dockerfile: Dockerfile
     environment:
       POSTGRES_HOST: db
@@ -132,14 +131,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sourcify}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
       POSTGRES_PORT: 5432
-      MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
-      PARQUET_CACHE_DIR: /parquet_cache
-      SYNC_MODE: ${SYNC_MODE:-incremental}
       BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
-      CLEANUP_AFTER_IMPORT: ${CLEANUP_AFTER_IMPORT:-true}
+      SYNC_MODE: ${SYNC_MODE:-full}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
     volumes:
-      - parquet_cache:/parquet_cache
-      - ./services/sync/logs:/app/logs
+      - ./services/sync-bigquery/logs:/app/logs
+      - ./services/sync/lib:/app/sync_lib
     depends_on:
       db:
         condition: service_healthy
@@ -150,10 +147,10 @@ services:
     profiles:
       - manual
 
-  # Sync scheduler (runs daily)
-  sync-scheduler:
+  # BigQuery sync scheduler (runs daily, automated)
+  sync-bigquery-scheduler:
     build:
-      context: ./services/sync
+      context: ./services/sync-bigquery
       dockerfile: Dockerfile
     command: ["python", "/app/scheduler.py"]
     environment:
@@ -162,15 +159,14 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sourcify}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
       POSTGRES_PORT: 5432
-      MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
-      PARQUET_CACHE_DIR: /parquet_cache
+      BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
       SYNC_MODE: incremental
       SYNC_SCHEDULE: ${SYNC_SCHEDULE:-0 2 * * *}
-      BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
-      CLEANUP_AFTER_IMPORT: ${CLEANUP_AFTER_IMPORT:-true}
+      RUN_ON_STARTUP: ${RUN_ON_STARTUP:-false}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
     volumes:
-      - parquet_cache:/parquet_cache
-      - ./services/sync/logs:/app/logs
+      - ./services/sync-bigquery/logs:/app/logs
+      - ./services/sync/lib:/app/sync_lib
     depends_on:
       db:
         condition: service_healthy
@@ -182,7 +178,6 @@ services:
 
 volumes:
   postgres_data:
-  parquet_cache:
 
 networks:
   sourcify-network:

@@ -5,22 +5,21 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    postgresql-client \
-    curl \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Create cache and log directories
-RUN mkdir -p /parquet_cache /app/logs
+# Create logs directory
+RUN mkdir -p /app/logs
 
-# Set environment
-ENV PYTHONUNBUFFERED=1
+# Make sync script executable
+RUN chmod +x sync_bigquery.py
 
-# Default command (can be overridden)
-CMD ["python", "sync.py"]
+# Default command
+CMD ["python", "sync_bigquery.py"]
