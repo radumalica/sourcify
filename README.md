@@ -55,9 +55,16 @@ Sourcify provides a comprehensive Docker Compose setup that includes all service
 
 All data is stored in Docker named volumes under `/var/lib/docker/volumes/`:
 - **postgres_data**: Database storage (~50-100GB for full dataset)
-- **parquet_cache**: Downloaded parquet files (~100-200GB)
+- **parquet_cache**: Downloaded parquet files (temporary during sync)
 
-If you have mounted `/var/lib/docker` to a large partition (e.g., 1.5TB), all data will automatically be stored there. The parquet cache can be cleaned after successful sync if space is needed.
+If you have mounted `/var/lib/docker` to a large partition (e.g., 1.5TB), all data will automatically be stored there.
+
+**Automatic Cleanup**: By default (`CLEANUP_AFTER_IMPORT=true`), parquet files are **automatically deleted after successful import** to save disk space. This means:
+- During sync: Downloads use ~1-5GB temporarily (files are deleted as they're processed)
+- After sync: Only database data remains (~50-100GB)
+- Disk usage is minimized automatically
+
+To keep parquet files for debugging or re-import, set `CLEANUP_AFTER_IMPORT=false` in your `.env` file.
 
 ### Quick Start
 
@@ -182,8 +189,9 @@ ALCHEMY_API_KEY=your_key_here
 INFURA_API_KEY=your_key_here
 
 # Sync Configuration
-SYNC_SCHEDULE=0 2 * * *  # Daily at 2 AM (cron format)
-SYNC_BATCH_SIZE=10000    # Rows per database batch
+SYNC_SCHEDULE=0 2 * * *        # Daily at 2 AM (cron format)
+SYNC_BATCH_SIZE=10000          # Rows per database batch
+CLEANUP_AFTER_IMPORT=true      # Delete parquet files after import (saves disk space)
 ```
 
 ### Monitoring
@@ -219,7 +227,9 @@ docker compose logs -f sync-scheduler
 - Solution: Check API keys in `.env` and monitor logs: `docker compose logs monitor`
 
 **Issue: Out of disk space**
-- Solution: The parquet cache is stored in a Docker named volume at `/var/lib/docker/volumes/sourcify_parquet_cache/_data/`. To clean it:
+- With `CLEANUP_AFTER_IMPORT=true` (default), parquet files are automatically deleted after import, using minimal temporary space
+- The main storage is the database in the `postgres_data` volume (~50-100GB)
+- If you set `CLEANUP_AFTER_IMPORT=false` and need to clean the parquet cache manually:
   ```bash
   # Stop services using the volume
   docker compose stop sync sync-scheduler
@@ -230,8 +240,6 @@ docker compose logs -f sync-scheduler
   # Recreate volume
   docker compose up -d sync-scheduler
   ```
-- The parquet cache requires ~100-200GB for the full dataset
-- Database storage is separate and stored in the `postgres_data` volume
 
 **Issue: Sync taking too long**
 - Solution: The initial sync downloads ~900 files. Subsequent syncs are incremental and much faster.

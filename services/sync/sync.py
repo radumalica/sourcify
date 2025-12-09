@@ -138,6 +138,15 @@ def sync_category(
 
             logger.info(f"Successfully imported {rows_imported:,} rows from {file_path}")
 
+            # Clean up parquet file after successful import (if enabled)
+            cleanup_after_import = os.getenv('CLEANUP_AFTER_IMPORT', 'true').lower() == 'true'
+            if cleanup_after_import:
+                logger.info(f"Cleaning up cached file: {file_path}")
+                if parquet_loader.delete_file(file_path):
+                    logger.info(f"Successfully deleted cached file: {file_path}")
+                else:
+                    logger.warning(f"Failed to delete cached file: {file_path}")
+
         except Exception as e:
             logger.error(f"Error processing {file_path}: {e}", exc_info=True)
             state_tracker.update_status(file_path, 'failed', error_message=str(e))

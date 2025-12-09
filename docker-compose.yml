@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # PostgreSQL database with pg_cron extension
   db:
@@ -133,6 +131,7 @@ services:
       PARQUET_CACHE_DIR: /parquet_cache
       SYNC_MODE: ${SYNC_MODE:-incremental}
       BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
+      CLEANUP_AFTER_IMPORT: ${CLEANUP_AFTER_IMPORT:-true}
     volumes:
       - parquet_cache:/parquet_cache
       - ./services/sync/logs:/app/logs
@@ -163,6 +162,7 @@ services:
       SYNC_MODE: incremental
       SYNC_SCHEDULE: ${SYNC_SCHEDULE:-0 2 * * *}
       BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
+      CLEANUP_AFTER_IMPORT: ${CLEANUP_AFTER_IMPORT:-true}
     volumes:
       - parquet_cache:/parquet_cache
       - ./services/sync/logs:/app/logs

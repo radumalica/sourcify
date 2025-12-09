@@ -213,6 +213,31 @@ class ParquetLoader:
         parquet_file = pq.ParquetFile(local_path)
         return parquet_file.metadata.num_rows
 
+    def delete_file(self, file_path: str) -> bool:
+        """
+        Delete a specific parquet file from cache.
+
+        Args:
+            file_path: Relative path to the parquet file
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        local_path = self.get_local_path(file_path)
+
+        if not os.path.exists(local_path):
+            logger.debug(f"File not found, already deleted: {local_path}")
+            return True
+
+        try:
+            file_size = os.path.getsize(local_path)
+            os.remove(local_path)
+            logger.info(f"Deleted cached file: {file_path} (freed {file_size:,} bytes)")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to delete {local_path}: {e}")
+            return False
+
     def cleanup_cache(self, keep_completed: bool = True, max_age_days: Optional[int] = None):
         """
         Clean up old files from the cache.
