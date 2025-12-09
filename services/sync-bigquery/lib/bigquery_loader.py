@@ -107,23 +107,39 @@ class BigQueryLoader:
         
         logger.info(f"Querying BigQuery table: {table_name}")
         
-        # Use LIMIT/OFFSET pagination to avoid "response too large" errors
-        # IMPORTANT: Must ORDER BY to ensure consistent pagination
-        offset = 0
-        total_rows = 0
-        
-        # Determine ORDER BY column based on table
-        # Use primary key or unique column for consistent ordering
+        # Use cursor-based pagination (WHERE > last_value) instead of OFFSET
+        # This is MUCH faster for large datasets
         order_by_column = self._get_order_by_column(table_name)
+        total_rows = 0
+        last_value = None
         
         while True:
+            # Build WHERE clause for cursor-based pagination
+            pagination_where = ""
+            if last_value is not None:
+                # For bytea columns, we need to handle them specially
+                if order_by_column in ['code_hash', 'source_hash']:
+                    # Convert bytes to hex string for comparison
+                    hex_value = last_value.hex()
+                    pagination_where = f"AND {order_by_column} > FROM_HEX('{hex_value}')"
+                else:
+                    # For other types (id, created_at), use direct comparison
+                    pagination_where = f"AND {order_by_column} > '{last_value}'"
+            
+            # Combine with existing where clause
+            combined_where = where_clause
+            if pagination_where:
+                if combined_where:
+                    combined_where += f" {pagination_where}"
+                else:
+                    combined_where = f"WHERE {pagination_where[4:]}"  # Remove "AND "
+            
             query = f"""
                 SELECT *
                 FROM `{full_table_id}`
-                {where_clause}
+                {combined_where}
                 ORDER BY {order_by_column}
                 LIMIT {batch_size}
-                OFFSET {offset}
             """
             
             logger.debug(f"Query: {query}")
@@ -138,13 +154,14 @@ class BigQueryLoader:
             total_rows += len(df)
             logger.info(f"Loaded batch of {len(df):,} rows from {table_name} (total so far: {total_rows:,})")
             
+            # Remember last value for next iteration
+            last_value = df[order_by_column].iloc[-1]
+            
             yield df
             
             # If we got fewer rows than batch_size, we've reached the end
             if len(df) < batch_size:
                 break
-            
-            offset += batch_size
         
         logger.info(f"Completed reading {total_rows:,} rows from {table_name}")
 
