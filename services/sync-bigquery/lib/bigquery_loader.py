@@ -59,7 +59,7 @@ class BigQueryLoader:
         order_by: str = None
     ) -> Iterator[pd.DataFrame]:
         """
-        Query a table from BigQuery in chunks.
+        Query a table from BigQuery in chunks using LIMIT/OFFSET pagination.
         
         Args:
             table_name: Name of the table to query
@@ -70,7 +70,6 @@ class BigQueryLoader:
         Yields:
             DataFrame chunks
         """
-        # Build the query
         full_table_id = f"{self.dataset_project}.{self.dataset_id}.{table_name}"
         
         # For initial sync, get all data
@@ -79,28 +78,40 @@ class BigQueryLoader:
         if last_sync_timestamp:
             where_clause = f"WHERE created_at > TIMESTAMP('{last_sync_timestamp}')"
         
-        # Order by clause for consistent pagination
-        order_clause = f"ORDER BY {order_by}" if order_by else ""
-        
-        query = f"""
-            SELECT *
-            FROM `{full_table_id}`
-            {where_clause}
-            {order_clause}
-        """
-        
         logger.info(f"Querying BigQuery table: {table_name}")
-        logger.debug(f"Query: {query}")
         
-        # Execute query with pagination
-        query_job = self.client.query(query)
-        
-        # Fetch results in batches
+        # Use LIMIT/OFFSET pagination to avoid "response too large" errors
+        offset = 0
         total_rows = 0
-        for batch in query_job.result(page_size=batch_size).to_dataframe_iterable():
-            total_rows += len(batch)
-            logger.info(f"Loaded batch of {len(batch):,} rows from {table_name} (total so far: {total_rows:,})")
-            yield batch
+        
+        while True:
+            query = f"""
+                SELECT *
+                FROM `{full_table_id}`
+                {where_clause}
+                LIMIT {batch_size}
+                OFFSET {offset}
+            """
+            
+            logger.debug(f"Query: {query}")
+            
+            # Execute query
+            query_job = self.client.query(query)
+            df = query_job.to_dataframe()
+            
+            if df.empty:
+                break
+            
+            total_rows += len(df)
+            logger.info(f"Loaded batch of {len(df):,} rows from {table_name} (total so far: {total_rows:,})")
+            
+            yield df
+            
+            # If we got fewer rows than batch_size, we've reached the end
+            if len(df) < batch_size:
+                break
+            
+            offset += batch_size
         
         logger.info(f"Completed reading {total_rows:,} rows from {table_name}")
 
