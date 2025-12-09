@@ -23,13 +23,17 @@ class BigQueryLoader:
         Args:
             project_id: Google Cloud project ID (optional for public datasets)
         """
-        # For public datasets, we don't need authentication
-        self.client = bigquery.Client(project=project_id) if project_id else bigquery.Client()
+        # Initialize BigQuery client with credentials
+        # Credentials should be set via GOOGLE_APPLICATION_CREDENTIALS env var
+        if not project_id:
+            raise ValueError("GCP_PROJECT_ID must be set in environment variables")
         
-        # Sourcify's public BigQuery dataset
-        # Tables have public_ prefix (e.g., public_code, public_verified_contracts)
-        self.dataset_project = "bigquery-public-data"
-        self.dataset_id = "sourcify"
+        self.client = bigquery.Client(project=project_id)
+        
+        # Sourcify dataset from Analytics Hub
+        # Dataset is linked to your project after subscription
+        self.dataset_project = project_id  # Use your project ID
+        self.dataset_id = "sourcify_dataset"  # Dataset name after Analytics Hub subscription
         
         # Mapping from local table names to BigQuery table names (with public_ prefix)
         self.table_name_mapping = {

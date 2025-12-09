@@ -33,3 +33,4 @@ workspace/
 
 # Sync service logs
 services/sync/logs/
+services/sync-bigquery/gcp-key.json
