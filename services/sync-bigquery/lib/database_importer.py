@@ -67,13 +67,34 @@ class DatabaseImporter:
         
         # Handle special data types for PostgreSQL
         import json
+        import numpy as np
+        
+        def convert_to_json(obj):
+            """Convert object to JSON, handling numpy arrays"""
+            if obj is None or pd.isna(obj):
+                return obj
+            if isinstance(obj, dict):
+                # Convert numpy arrays to lists recursively
+                def convert_numpy(o):
+                    if isinstance(o, np.ndarray):
+                        return o.tolist()
+                    elif isinstance(o, dict):
+                        return {k: convert_numpy(v) for k, v in o.items()}
+                    elif isinstance(o, list):
+                        return [convert_numpy(item) for item in o]
+                    else:
+                        return o
+                converted = convert_numpy(obj)
+                return json.dumps(converted)
+            return obj
+        
         for col in columns:
             if df[col].dtype == 'object':
                 # Check if column contains dicts (for JSONB columns)
                 sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
                 if isinstance(sample, dict):
                     # Convert dicts to JSON strings for JSONB columns
-                    df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
+                    df[col] = df[col].apply(convert_to_json)
                 elif isinstance(sample, bytes):
                     # Bytes are already in correct format for bytea columns
                     pass
