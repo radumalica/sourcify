@@ -68,13 +68,20 @@ To keep parquet files for debugging or re-import, set `CLEANUP_AFTER_IMPORT=fals
 
 ### Quick Start
 
-1. **Configure environment variables:**
+1. **Initialize the database schema submodule:**
+   ```bash
+   git submodule update --init --recursive
+   ```
+
+   This pulls the [Verifier Alliance](https://github.com/verifier-alliance/database-specs) database schema, which is the foundation for the Sourcify database.
+
+2. **Configure environment variables:**
    ```bash
    cp .env.example .env
    # Edit .env with your configuration (API keys, etc.)
    ```
 
-2. **Start all services:**
+3. **Start all services:**
    ```bash
    docker compose up -d
    ```
@@ -89,7 +96,7 @@ To keep parquet files for debugging or re-import, set `CLEANUP_AFTER_IMPORT=fals
      - **monitor**: Chain monitoring service
      - **sync-scheduler**: Daily automatic sync from official Sourcify export
 
-3. **Check service status:**
+4. **Check service status:**
    ```bash
    docker compose ps
    docker compose logs -f server
