@@ -13,6 +13,7 @@ from typing import List, Dict, Optional, Set
 from io import StringIO
 import json
 import time
+import csv
 
 logger = logging.getLogger(__name__)
 
@@ -448,7 +449,10 @@ class OptimizedDatabaseImporter:
             """)
 
             # Convert special column types for COPY compatibility
+            # Track which columns are bytea (already in hex format, don't escape)
+            bytea_columns = set()
             df_copy = df.copy()
+
             for col in columns:
                 if df_copy[col].dtype == 'object':
                     # Check first non-null value to determine type
@@ -459,6 +463,7 @@ class OptimizedDatabaseImporter:
                         df_copy[col] = df_copy[col].apply(
                             lambda x: '\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
                         )
+                        bytea_columns.add(col)  # Mark as bytea to skip escaping
                     elif isinstance(sample, (dict, list)):
                         # Convert dict/list to JSON string for both JSON and JSONB columns
                         # PostgreSQL COPY accepts JSON strings for both types
@@ -475,7 +480,18 @@ class OptimizedDatabaseImporter:
                         lambda x: str(x).lower() if not pd.isna(x) else None
                     )
 
-            # Prepare CSV buffer
+            # Escape special characters in string columns for PostgreSQL COPY format
+            # PostgreSQL COPY uses backslash escapes: \t, \n, \r, \\
+            # Skip bytea columns (already in hex format)
+            for col in columns:
+                if col not in bytea_columns and df_copy[col].dtype == 'object':
+                    df_copy[col] = df_copy[col].apply(
+                        lambda x: x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+                        if isinstance(x, str) else x
+                    )
+
+            # Prepare CSV buffer for PostgreSQL COPY
+            # Use QUOTE_NONE to prevent quoting (critical for bytea NULL handling)
             buffer = StringIO()
             df_copy.to_csv(
                 buffer,
@@ -483,8 +499,9 @@ class OptimizedDatabaseImporter:
                 header=False,
                 sep='\t',
                 na_rep='\\N',  # PostgreSQL NULL representation
-                doublequote=False,
-                escapechar='\\'
+                quoting=csv.QUOTE_NONE,  # Don't quote any values
+                escapechar=None,  # We manually escaped above
+                lineterminator='\n'  # Use Unix line endings
             )
             buffer.seek(0)
 

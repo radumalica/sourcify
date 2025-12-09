@@ -19,6 +19,7 @@ import psycopg2
 import threading
 import queue
 import time
+import signal
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Dict, Optional
@@ -26,6 +27,9 @@ import pandas as pd
 
 from lib import BigQueryLoader, StateTracker
 from lib.database_importer_optimized import OptimizedDatabaseImporter
+
+# Global flag for clean shutdown
+shutdown_requested = False
 
 
 # Configure logging
@@ -149,11 +153,16 @@ class ParallelSyncWorker:
         self.total_imported = 0
         self.thread = None
         self.error = None
+        self.shutdown_event = threading.Event()
 
     def start(self):
         """Start the worker thread"""
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
+
+    def stop(self):
+        """Signal worker to stop"""
+        self.shutdown_event.set()
 
     def _run(self):
         """Worker thread main loop"""
@@ -169,12 +178,16 @@ class ParallelSyncWorker:
                 manage_indexes=False  # Indexes managed at table level
             )
 
-            while True:
+            while not self.shutdown_event.is_set():
                 try:
                     # Get batch from queue (with timeout to check for shutdown)
                     batch = self.batch_queue.get(timeout=1)
 
                     if batch is None:  # Poison pill - shutdown signal
+                        break
+
+                    # Check shutdown before processing
+                    if self.shutdown_event.is_set():
                         break
 
                     # Import batch
@@ -198,21 +211,29 @@ class ParallelSyncWorker:
                 except queue.Empty:
                     continue
                 except Exception as e:
-                    logger.error(f"Error in worker thread: {e}", exc_info=True)
-                    self.error = e
+                    if not self.shutdown_event.is_set():
+                        logger.error(f"Error in worker thread: {e}", exc_info=True)
+                        self.error = e
                     break
 
         except Exception as e:
-            logger.error(f"Fatal error in worker: {e}", exc_info=True)
-            self.error = e
+            if not self.shutdown_event.is_set():
+                logger.error(f"Fatal error in worker: {e}", exc_info=True)
+                self.error = e
         finally:
             if conn:
-                conn.close()
+                try:
+                    conn.rollback()  # Rollback any pending transaction
+                    conn.close()
+                except:
+                    pass
 
-    def join(self):
-        """Wait for worker to complete"""
+    def join(self, timeout=10):
+        """Wait for worker to complete with timeout"""
         if self.thread:
-            self.thread.join()
+            self.thread.join(timeout=timeout)
+            if self.thread.is_alive():
+                logger.warning(f"Worker thread did not exit cleanly within {timeout}s")
 
 
 def get_db_connection():
@@ -275,28 +296,29 @@ def sync_table_parallel(
         'errors': 0
     }
 
-    # Get total count
-    total_count = bigquery_loader.get_table_count(bigquery_table_name)
-    logger.info(f"Total rows to sync: {total_count:,}")
-
-    monitor.start_table(local_table_name, total_count)
-
-    # Manage indexes
-    if manage_indexes:
-        logger.info("Preparing table for bulk import (dropping indexes)...")
-        conn = psycopg2.connect(**conn_params)
-        try:
-            importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=True)
-            importer.prepare_table_for_import(local_table_name)
-        finally:
-            conn.close()
+    workers = []
 
     try:
+        # Get total count
+        total_count = bigquery_loader.get_table_count(bigquery_table_name)
+        logger.info(f"Total rows to sync: {total_count:,}")
+
+        monitor.start_table(local_table_name, total_count)
+
+        # Manage indexes
+        if manage_indexes:
+            logger.info("Preparing table for bulk import (dropping indexes)...")
+            conn = psycopg2.connect(**conn_params)
+            try:
+                importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=True)
+                importer.prepare_table_for_import(local_table_name)
+            finally:
+                conn.close()
+
         # Create queue for batches
         batch_queue = queue.Queue(maxsize=num_workers * 2)  # Buffer 2x workers
 
         # Start worker threads
-        workers = []
         for i in range(num_workers):
             worker = ParallelSyncWorker(
                 batch_queue,
@@ -315,6 +337,11 @@ def sync_table_parallel(
             bigquery_table_name,
             batch_size=batch_size
         ):
+            # Check for shutdown signal
+            if shutdown_requested:
+                logger.info("Shutdown requested, stopping batch fetch...")
+                break
+
             stats['rows_fetched'] += len(df_chunk)
 
             # Queue batch for workers
@@ -323,50 +350,96 @@ def sync_table_parallel(
                 'size': len(df_chunk)
             })
 
-        # Wait for all batches to be processed
-        logger.info("Waiting for workers to complete...")
-        batch_queue.join()
+        # Wait for all batches to be processed (with timeout)
+        if not shutdown_requested:
+            logger.info("Waiting for workers to complete...")
+            try:
+                # Wait with timeout to allow Ctrl+C
+                while batch_queue.unfinished_tasks > 0:
+                    time.sleep(0.5)
+                    if shutdown_requested:
+                        break
+            except KeyboardInterrupt:
+                logger.info("Interrupted during queue join")
 
         # Send shutdown signal to workers
-        for _ in workers:
-            batch_queue.put(None)
-
-        # Wait for workers to finish
+        logger.info("Stopping workers...")
         for worker in workers:
-            worker.join()
-            if worker.error:
-                logger.error(f"Worker encountered error: {worker.error}")
+            worker.stop()
+
+        # Send poison pills
+        for _ in workers:
+            try:
+                batch_queue.put(None, timeout=1)
+            except queue.Full:
+                pass
+
+        # Wait for workers to finish (with timeout)
+        for i, worker in enumerate(workers):
+            worker.join(timeout=5)
+            if worker.error and not shutdown_requested:
+                logger.error(f"Worker {i+1} encountered error: {worker.error}")
                 stats['errors'] += 1
             stats['rows_imported'] += worker.total_imported
 
-        monitor.finish_table(local_table_name)
+        if not shutdown_requested:
+            monitor.finish_table(local_table_name)
 
-        # Recreate indexes
-        if manage_indexes:
-            logger.info("Finalizing table (recreating indexes)...")
-            conn = psycopg2.connect(**conn_params)
-            try:
-                importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=True)
-                importer.finalize_table_after_import(local_table_name)
-            finally:
-                conn.close()
+            # Recreate indexes
+            if manage_indexes:
+                logger.info("Finalizing table (recreating indexes)...")
+                conn = psycopg2.connect(**conn_params)
+                try:
+                    importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=True)
+                    importer.finalize_table_after_import(local_table_name)
+                finally:
+                    conn.close()
 
-        logger.info(
-            f"Completed {local_table_name}: "
-            f"fetched {stats['rows_fetched']:,}, "
-            f"imported {stats['rows_imported']:,}"
-        )
+            logger.info(
+                f"Completed {local_table_name}: "
+                f"fetched {stats['rows_fetched']:,}, "
+                f"imported {stats['rows_imported']:,}"
+            )
+        else:
+            logger.info(f"Sync interrupted for {local_table_name}: {stats['rows_imported']:,} rows imported before shutdown")
 
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, cleaning up...")
+        stats['errors'] += 1
     except Exception as e:
         logger.error(f"Error syncing {local_table_name}: {e}", exc_info=True)
         stats['errors'] += 1
+    finally:
+        # Always stop workers on exit
+        for worker in workers:
+            worker.stop()
 
     return stats
 
 
+def signal_handler(signum, frame):
+    """Handle shutdown signals cleanly"""
+    global shutdown_requested
+    if not shutdown_requested:
+        logger.info("\n" + "=" * 80)
+        logger.info("Shutdown signal received (Ctrl+C), cleaning up...")
+        logger.info("Please wait for workers to finish current batch...")
+        logger.info("=" * 80)
+        shutdown_requested = True
+    else:
+        logger.warning("Forced shutdown! Exiting immediately...")
+        sys.exit(1)
+
+
 def main():
     """Main sync function"""
+    global shutdown_requested
+
     load_dotenv()
+
+    # Register signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     logger.info("=" * 80)
     logger.info("Starting OPTIMIZED Sourcify BigQuery Sync")
@@ -429,6 +502,11 @@ def main():
         }
 
         for local_table, bq_table in tables_to_sync:
+            # Check for shutdown signal
+            if shutdown_requested:
+                logger.info("Shutdown requested, skipping remaining tables...")
+                break
+
             table_stats = sync_table_parallel(
                 local_table,
                 bq_table,
@@ -448,7 +526,10 @@ def main():
         summary = monitor.get_summary()
 
         logger.info("=" * 80)
-        logger.info("SYNC COMPLETE!")
+        if shutdown_requested:
+            logger.info("SYNC INTERRUPTED!")
+        else:
+            logger.info("SYNC COMPLETE!")
         logger.info("=" * 80)
         logger.info(f"Total rows processed: {summary['total_rows_processed']:,}")
         logger.info(f"Total rows imported: {summary['total_rows_imported']:,}")
@@ -456,9 +537,12 @@ def main():
         logger.info(f"Overall rate: {summary['overall_rate']:.0f} rows/sec")
         logger.info(f"Errors: {total_stats['errors']}")
 
-        exit_code = 0 if total_stats['errors'] == 0 else 1
+        exit_code = 0 if (total_stats['errors'] == 0 and not shutdown_requested) else 1
         sys.exit(exit_code)
 
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt in main, exiting...")
+        sys.exit(130)  # Standard exit code for Ctrl+C
     except Exception as e:
         logger.error(f"Fatal error during sync: {e}", exc_info=True)
         sys.exit(1)
