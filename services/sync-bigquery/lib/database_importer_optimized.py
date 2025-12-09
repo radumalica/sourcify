@@ -275,21 +275,23 @@ class OptimizedDatabaseImporter:
 
     def _get_table_columns(self, table_name: str) -> List[str]:
         """
-        Get list of column names for a PostgreSQL table.
+        Get list of column names for a PostgreSQL table, excluding generated columns.
 
         Args:
             table_name: Name of the table
 
         Returns:
-            List of column names
+            List of column names (excluding GENERATED columns)
         """
         cursor = self.conn.cursor()
         try:
+            # Exclude GENERATED columns (e.g., signature_hash_4 in signatures table)
             cursor.execute("""
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                 AND table_name = %s
+                AND (is_generated = 'NEVER' OR is_generated IS NULL)
                 ORDER BY ordinal_position
             """, (table_name,))
 
@@ -445,9 +447,37 @@ class OptimizedDatabaseImporter:
                 ON COMMIT DROP
             """)
 
+            # Convert special column types for COPY compatibility
+            df_copy = df.copy()
+            for col in columns:
+                if df_copy[col].dtype == 'object':
+                    # Check first non-null value to determine type
+                    sample = df_copy[col].dropna().iloc[0] if not df_copy[col].dropna().empty else None
+
+                    if isinstance(sample, bytes):
+                        # Convert bytes to hex string with \x prefix for PostgreSQL bytea
+                        df_copy[col] = df_copy[col].apply(
+                            lambda x: '\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
+                        )
+                    elif isinstance(sample, (dict, list)):
+                        # Convert dict/list to JSON string for both JSON and JSONB columns
+                        # PostgreSQL COPY accepts JSON strings for both types
+                        df_copy[col] = df_copy[col].apply(
+                            lambda x: json.dumps(x) if isinstance(x, (dict, list)) else (None if pd.isna(x) else x)
+                        )
+                    elif isinstance(sample, str):
+                        # Strings are used for: text, varchar, json/jsonb (already serialized), enums
+                        # No special handling needed for COPY - pass through as-is
+                        pass
+                elif df_copy[col].dtype == 'bool':
+                    # Convert Python bool to PostgreSQL format: true/false (lowercase)
+                    df_copy[col] = df_copy[col].apply(
+                        lambda x: str(x).lower() if not pd.isna(x) else None
+                    )
+
             # Prepare CSV buffer
             buffer = StringIO()
-            df.to_csv(
+            df_copy.to_csv(
                 buffer,
                 index=False,
                 header=False,
