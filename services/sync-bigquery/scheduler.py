@@ -29,13 +29,13 @@ logger = logging.getLogger(__name__)
 def run_sync():
     """Execute the BigQuery sync"""
     logger.info("=" * 80)
-    logger.info("Starting scheduled BigQuery sync")
+    logger.info("Starting scheduled BigQuery sync (optimized)")
     logger.info("=" * 80)
-    
+
     try:
-        # Run the sync script
+        # Run the optimized sync script for better performance
         result = subprocess.run(
-            ['python', '/app/sync_bigquery.py'],
+            ['python', '/app/sync_bigquery_optimized.py'],
             capture_output=True,
             text=True
         )

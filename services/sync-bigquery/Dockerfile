@@ -18,8 +18,8 @@ COPY . .
 # Create logs directory
 RUN mkdir -p /app/logs
 
-# Make sync script executable
-RUN chmod +x sync_bigquery.py
+# Make sync scripts executable
+RUN chmod +x sync_bigquery.py sync_bigquery_optimized.py
 
-# Default command
+# Default command (use optimized version for better performance)
 CMD ["python", "sync_bigquery.py"]

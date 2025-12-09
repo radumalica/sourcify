@@ -5,7 +5,10 @@ Provides components for syncing data from Sourcify's BigQuery dataset to Postgre
 """
 
 from .bigquery_loader import BigQueryLoader
-from .database_importer import DatabaseImporter
+from .database_importer_optimized import OptimizedDatabaseImporter
 from .state_tracker import StateTracker
 
-__all__ = ['BigQueryLoader', 'DatabaseImporter', 'StateTracker']
+# Alias for backwards compatibility
+DatabaseImporter = OptimizedDatabaseImporter
+
+__all__ = ['BigQueryLoader', 'OptimizedDatabaseImporter', 'DatabaseImporter', 'StateTracker']
