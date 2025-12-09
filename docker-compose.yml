@@ -1,0 +1,184 @@
+version: "3.8"
+
+services:
+  # PostgreSQL database with pg_cron extension
+  db:
+    build:
+      context: ./services/database
+      dockerfile_inline: |
+        FROM postgres:15-bookworm
+        RUN apt-get update && \
+            apt-get -y install postgresql-15-cron && \
+            apt-get clean && \
+            rm -rf /var/lib/apt/lists/*
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - parquet_cache:/parquet_cache
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_cron"
+      - "-c"
+      - "cron.database_name=${POSTGRES_DB:-sourcify}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sourcify}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sourcify-network
+
+  # Database migrations
+  migrations:
+    image: node:22.5.1-bookworm-slim
+    volumes:
+      - ./services/database:/home/app/services/database
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-sourcify}:${POSTGRES_PASSWORD:-sourcify}@db:5432/${POSTGRES_DB:-sourcify}?sslmode=disable"
+    command: /bin/bash -c "cd /home/app/services/database && npm install && npm run migrate:up"
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - sourcify-network
+
+  # Main Sourcify server
+  server:
+    build:
+      context: .
+      dockerfile: services/server/Dockerfile
+    ports:
+      - "${SERVER_PORT:-5555}:5555"
+    environment:
+      SOURCIFY_POSTGRES_HOST: db
+      SOURCIFY_POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      SOURCIFY_POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      SOURCIFY_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+      SOURCIFY_POSTGRES_PORT: 5432
+      NODE_ENV: ${NODE_ENV:-development}
+    volumes:
+      - ./services/server/src/sourcify-chains-default.json:/home/app/services/server/dist/sourcify-chains.json:ro
+      - ./services/server/src/config:/home/app/services/server/dist/config:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - sourcify-network
+
+  # 4byte signature service
+  4byte:
+    build:
+      context: .
+      dockerfile: services/4byte/Dockerfile
+    ports:
+      - "${FOURBYTE_PORT:-4444}:4444"
+    environment:
+      FOURBYTES_POSTGRES_HOST: db
+      FOURBYTES_POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      FOURBYTES_POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      FOURBYTES_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+      FOURBYTES_POSTGRES_PORT: 5432
+      PORT: 4444
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - sourcify-network
+
+  # Monitor service
+  monitor:
+    build:
+      context: .
+      dockerfile: services/monitor/Dockerfile
+    environment:
+      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
+      INFURA_API_KEY: ${INFURA_API_KEY:-}
+      DRPC_API_KEY: ${DRPC_API_KEY:-}
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
+      NODE_ENV: ${NODE_ENV:-development}
+      NODE_LOG_LEVEL: ${NODE_LOG_LEVEL:-info}
+    volumes:
+      - ./services/monitor/monitorChains.json:/home/app/services/monitor/monitorChains.json:ro
+    depends_on:
+      server:
+        condition: service_started
+    networks:
+      - sourcify-network
+
+  # Parquet sync service (manual execution via docker compose run sync)
+  sync:
+    build:
+      context: ./services/sync
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+      POSTGRES_PORT: 5432
+      MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
+      PARQUET_CACHE_DIR: /parquet_cache
+      SYNC_MODE: ${SYNC_MODE:-incremental}
+      BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
+    volumes:
+      - parquet_cache:/parquet_cache
+      - ./services/sync/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - sourcify-network
+    profiles:
+      - manual
+
+  # Sync scheduler (runs daily)
+  sync-scheduler:
+    build:
+      context: ./services/sync
+      dockerfile: Dockerfile
+    command: ["python", "/app/scheduler.py"]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+      POSTGRES_PORT: 5432
+      MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
+      PARQUET_CACHE_DIR: /parquet_cache
+      SYNC_MODE: incremental
+      SYNC_SCHEDULE: ${SYNC_SCHEDULE:-0 2 * * *}
+      BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
+    volumes:
+      - parquet_cache:/parquet_cache
+      - ./services/sync/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - sourcify-network
+
+volumes:
+  postgres_data:
+  parquet_cache:
+
+networks:
+  sourcify-network:
+    driver: bridge

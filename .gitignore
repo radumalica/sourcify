@@ -30,3 +30,6 @@ workspace/
 
 # Sourcify release script temporary file
 .release_package_data.tmp
+
+# Sync service logs
+services/sync/logs/
