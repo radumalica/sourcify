@@ -146,10 +146,12 @@ class DatabaseImporter:
                 if col in df.columns:
                     df[col] = df[col].apply(self._to_json_string)
 
-        # Add audit columns if they don't exist
-        if 'created_by' not in df.columns and self._table_has_audit_columns(table_name):
-            df['created_by'] = 'sync_service'
-            df['updated_by'] = 'sync_service'
+        # Remove audit columns if they exist - let database triggers handle them
+        # This is more efficient and avoids conflicts with database triggers
+        audit_columns = ['created_at', 'updated_at', 'created_by', 'updated_by']
+        for col in audit_columns:
+            if col in df.columns:
+                df = df.drop(columns=[col])
 
         # Handle NaN/None values
         df = df.where(pd.notnull(df), None)
@@ -230,17 +232,26 @@ class DatabaseImporter:
             ON CONFLICT clause SQL
         """
         # Map table to unique constraint
+        # Using DO NOTHING for immutable data (code, sources)
+        # Using DO UPDATE SET updated_at = EXCLUDED.updated_at for mutable data
+        # This allows tracking which service last touched the data
         conflict_map = {
+            # Immutable data - once written, never changes
             'code': 'ON CONFLICT (code_hash) DO NOTHING',
             'sources': 'ON CONFLICT (source_hash) DO NOTHING',
-            'contracts': 'ON CONFLICT (id) DO NOTHING',
+            
+            # Mutable data - update timestamps to track freshness
+            # Note: We use the pseudo_pkey (natural key) not the id for conflicts
+            'contracts': 'ON CONFLICT (creation_code_hash, runtime_code_hash) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
+            'compiled_contracts': 'ON CONFLICT (compiler, version, language, creation_code_hash, runtime_code_hash) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
+            'contract_deployments': 'ON CONFLICT (chain_id, address, transaction_hash) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
+            'compiled_contracts_sources': 'ON CONFLICT (compilation_id, path) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
+            'verified_contracts': 'ON CONFLICT (compilation_id, deployment_id) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
+            
+            # Other tables
             'signatures': 'ON CONFLICT (signature_hash_32) DO NOTHING',
-            'contract_deployments': 'ON CONFLICT (id) DO NOTHING',
-            'compiled_contracts': 'ON CONFLICT (id) DO NOTHING',
-            'compiled_contracts_sources': 'ON CONFLICT (id) DO NOTHING',
             'compiled_contracts_signatures': 'ON CONFLICT (compilation_id, signature_hash_32, signature_type) DO NOTHING',
-            'verified_contracts': 'ON CONFLICT (id) DO NOTHING',
-            'sourcify_matches': 'ON CONFLICT (verified_contract_id) DO NOTHING',
+            'sourcify_matches': 'ON CONFLICT (verified_contract_id) DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by',
             'verification_jobs': 'ON CONFLICT (id) DO NOTHING',
         }
 
