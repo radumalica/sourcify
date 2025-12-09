@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from typing import Dict, Optional
 import pandas as pd
 
-from lib import BigQueryLoader, StateTracker
+from lib import BigQueryLoader, StateTracker, IndexStateManager
 from lib.database_importer_optimized import OptimizedDatabaseImporter
 
 # Global flag for clean shutdown
@@ -444,6 +444,16 @@ def main():
     logger.info("=" * 80)
     logger.info("Starting OPTIMIZED Sourcify BigQuery Sync")
     logger.info("=" * 80)
+
+    # Check for pending index restorations from previous interrupted runs
+    index_state = IndexStateManager()
+    pending_tables = index_state.get_all_pending_tables()
+    if pending_tables:
+        logger.warning("=" * 80)
+        logger.warning("PENDING INDEX RESTORATION DETECTED!")
+        logger.warning(f"Tables with dropped indexes from previous run: {', '.join(pending_tables)}")
+        logger.warning("These will be restored before starting new sync...")
+        logger.warning("=" * 80)
 
     # Configuration
     batch_size = int(os.getenv('BATCH_SIZE', '100000'))  # Increased from 10k

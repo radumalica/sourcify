@@ -14,6 +14,7 @@ from io import StringIO
 import json
 import time
 import csv
+from .index_state_manager import IndexStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,11 @@ class OptimizedDatabaseImporter:
         self.use_copy = use_copy
         self.manage_indexes = manage_indexes
 
-        # Track which indexes have been dropped
+        # Track which indexes have been dropped (in-memory)
         self.dropped_indexes: Dict[str, List[Dict]] = {}
+
+        # Persistent state manager for index restoration across runs
+        self.index_state = IndexStateManager()
 
         # Define import order based on foreign key dependencies
         self.import_order = [
@@ -91,6 +95,7 @@ class OptimizedDatabaseImporter:
     def prepare_table_for_import(self, table_name: str):
         """
         Prepare a table for bulk import by dropping indexes and disabling triggers.
+        Also checks for and restores any indexes from previous interrupted runs.
 
         Args:
             table_name: Name of the table to prepare
@@ -100,10 +105,22 @@ class OptimizedDatabaseImporter:
 
         logger.info(f"Preparing {table_name} for bulk import...")
 
+        # First, check if there are pending indexes from a previous interrupted run
+        pending_indexes = self.index_state.get_pending_indexes(table_name)
+        if pending_indexes:
+            logger.warning(
+                f"Found {len(pending_indexes)} indexes from previous interrupted sync. "
+                f"Restoring them first..."
+            )
+            self._restore_indexes_from_state(table_name, pending_indexes)
+            self.index_state.mark_indexes_restored(table_name)
+
         # Get and drop indexes (except primary key and unique constraints)
         indexes = self._get_table_indexes(table_name)
         if indexes:
             self._drop_indexes(table_name, indexes)
+            # Save state so we can restore even if interrupted
+            self.index_state.mark_indexes_dropped(table_name, indexes)
 
         # Disable autovacuum for this table during import
         self._set_table_autovacuum(table_name, enabled=False)
@@ -122,9 +139,11 @@ class OptimizedDatabaseImporter:
 
         logger.info(f"Finalizing {table_name} after bulk import...")
 
-        # Recreate dropped indexes
+        # Recreate dropped indexes (from in-memory cache)
         if table_name in self.dropped_indexes:
             self._recreate_indexes(table_name)
+            # Clear persistent state after successful restoration
+            self.index_state.mark_indexes_restored(table_name)
 
         # Re-enable autovacuum
         self._set_table_autovacuum(table_name, enabled=True)
@@ -207,6 +226,17 @@ class OptimizedDatabaseImporter:
             return
 
         indexes = self.dropped_indexes[table_name]
+        self._restore_indexes_from_state(table_name, indexes)
+        del self.dropped_indexes[table_name]
+
+    def _restore_indexes_from_state(self, table_name: str, indexes: List[Dict]):
+        """
+        Restore indexes from state (used for recovery and normal recreation).
+
+        Args:
+            table_name: Name of the table
+            indexes: List of index definitions to restore
+        """
         cursor = self.conn.cursor()
 
         try:
@@ -220,7 +250,6 @@ class OptimizedDatabaseImporter:
                 logger.info(f"Index {idx['name']} recreated in {elapsed:.2f}s")
 
             self.conn.commit()
-            del self.dropped_indexes[table_name]
             logger.info(f"Recreated {len(indexes)} indexes for {table_name}")
 
         except Exception as e:
