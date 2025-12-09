@@ -152,6 +152,14 @@ class DatabaseImporter:
                 # UUIDs from BigQuery come as strings, which PostgreSQL can handle
                 pass
         
+        # Convert pandas NaT (Not a Time) to None for timestamp columns
+        # NaT appears as string 'NaT' which PostgreSQL can't parse
+        timestamp_columns = ['created_at', 'updated_at']
+        for col in timestamp_columns:
+            if col in columns:
+                # Replace NaT with None
+                df[col] = df[col].replace({pd.NaT: None})
+        
         # Process in batches
         for i in range(0, total_rows, batch_size):
             batch_df = df.iloc[i:i + batch_size]
