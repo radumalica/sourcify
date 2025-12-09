@@ -51,6 +51,8 @@ module.exports = {
       /^https?:\/\/192\.168(?:\.\d{1,3}){2}(?::\d+)?$/, // local IPs with 192.168.x.x
     process.env.NODE_ENV !== "production" &&
       /^https?:\/\/10(?:\.\d{1,3}){3}(?::\d+)?$/, // local IPs with 10.x.x.x
+    process.env.NODE_ENV !== "production" &&
+      /^https?:\/\/172\.16(?:\.\d{1,3}){2}(?::\d+)?$/, // local IPs with 172.16.x.x
   ],
   // verify-deprecated endpoint used in services/database/scripts.mjs. Used when recreating the DB with deprecated chains that don't have an RPC.
   verifyDeprecated: false,
