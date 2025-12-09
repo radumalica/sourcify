@@ -152,7 +152,7 @@ class ParquetLoader:
         if not os.path.exists(local_path):
             raise FileNotFoundError(f"Parquet file not found: {local_path}")
 
-        logger.info(f"Reading parquet file: {local_path}")
+        logger.info(f"Reading parquet file: {local_path} with batch_size={batch_size:,}")
 
         parquet_file = pq.ParquetFile(local_path)
         total_rows = 0
@@ -161,7 +161,7 @@ class ParquetLoader:
             df = batch.to_pandas()
             total_rows += len(df)
 
-            logger.debug(f"Loaded batch of {len(df):,} rows (total: {total_rows:,})")
+            logger.info(f"Loaded batch of {len(df):,} rows (total so far: {total_rows:,})")
 
             yield df
 

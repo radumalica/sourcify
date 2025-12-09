@@ -106,12 +106,13 @@ class DatabaseImporter:
 
         # Import in batches
         rows_imported = 0
+        total_rows_attempted = len(rows)
         try:
             with self.conn.cursor() as cursor:
                 execute_batch(cursor, query, rows, page_size=batch_size)
                 rows_imported = cursor.rowcount
             self.conn.commit()
-            logger.info(f"Imported {rows_imported:,} rows into {table_name}")
+            logger.info(f"Imported {rows_imported:,} rows into {table_name} (attempted: {total_rows_attempted:,}, skipped due to conflicts: {total_rows_attempted - rows_imported:,})")
 
         except Exception as e:
             self.conn.rollback()
