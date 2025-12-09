@@ -57,7 +57,7 @@ class OptimizedDatabaseImporter:
         """Apply PostgreSQL performance optimizations for bulk loading"""
         cursor = self.conn.cursor()
         try:
-            logger.info("Applying PostgreSQL performance optimizations for bulk loading...")
+            logger.info("Applying PostgreSQL performance optimizations...")
 
             # Disable synchronous commit (huge performance gain for bulk inserts)
             cursor.execute("SET synchronous_commit = OFF")
@@ -68,17 +68,17 @@ class OptimizedDatabaseImporter:
             # Increase maintenance work memory for index creation
             cursor.execute("SET maintenance_work_mem = '2GB'")
 
-            # Reduce checkpoint frequency during bulk load
-            cursor.execute("SET checkpoint_timeout = '30min'")
-
             # Disable JIT compilation (can slow down bulk operations)
             cursor.execute("SET jit = OFF")
 
+            # Note: checkpoint_timeout and max_wal_size require server restart or config file
+            # Use postgres-bulk-load.conf for these settings
+
             self.conn.commit()
-            logger.info("Performance optimizations applied successfully")
+            logger.info("Performance optimizations applied")
 
         except Exception as e:
-            logger.warning(f"Could not apply all performance optimizations: {e}")
+            logger.warning(f"Could not apply some performance optimizations: {e}")
             self.conn.rollback()
         finally:
             cursor.close()
