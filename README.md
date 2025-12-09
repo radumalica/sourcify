@@ -78,8 +78,12 @@ To keep parquet files for debugging or re-import, set `CLEANUP_AFTER_IMPORT=fals
 2. **Configure environment variables:**
    ```bash
    cp .env.example .env
-   # Edit .env with your configuration (API keys, etc.)
    ```
+
+   **Important**: The server and monitor require certain API keys to be set (even as placeholders). The `.env.example` file includes placeholder values that will let the services start. For production use, you should:
+   - Get free API keys from [Alchemy](https://www.alchemy.com/) and [Infura](https://www.infura.io/)
+   - Replace the placeholder values in `.env` with your real keys
+   - Without real API keys, some blockchain networks may not be accessible
 
 3. **Start all services:**
    ```bash
@@ -226,6 +230,11 @@ docker compose logs -f sync-scheduler
 - Database: localhost:5432
 
 ### Troubleshooting
+
+**Issue: Server or monitor fails with "API key not found" error**
+- Solution: Make sure you created a `.env` file: `cp .env.example .env`
+- The `.env.example` includes placeholder values that allow services to start
+- For production use, replace placeholders with real API keys from Alchemy, Infura, etc.
 
 **Issue: Sync fails with foreign key constraint errors**
 - Solution: Ensure migrations are up to date: `docker compose up migrations`

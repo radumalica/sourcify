@@ -61,6 +61,10 @@ services:
       SOURCIFY_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
       SOURCIFY_POSTGRES_PORT: 5432
       NODE_ENV: ${NODE_ENV:-development}
+      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
+      INFURA_API_KEY: ${INFURA_API_KEY:-}
+      DRPC_API_KEY: ${DRPC_API_KEY:-}
+      ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
     volumes:
       - ./services/server/src/sourcify-chains-default.json:/home/app/services/server/dist/sourcify-chains.json:ro
       - ./services/server/src/config:/home/app/services/server/dist/config:ro
@@ -104,6 +108,7 @@ services:
       ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
       INFURA_API_KEY: ${INFURA_API_KEY:-}
       DRPC_API_KEY: ${DRPC_API_KEY:-}
+      ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
       CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
       CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
       NODE_ENV: ${NODE_ENV:-development}
