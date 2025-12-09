@@ -65,6 +65,35 @@ class DatabaseImporter:
         # Convert DataFrame to list of tuples
         columns = df.columns.tolist()
         
+        # Handle special data types for PostgreSQL
+        import json
+        for col in columns:
+            if df[col].dtype == 'object':
+                # Check if column contains dicts (for JSONB columns)
+                sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+                if isinstance(sample, dict):
+                    # Convert dicts to JSON strings for JSONB columns
+                    df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
+                elif isinstance(sample, bytes):
+                    # Bytes are already in correct format for bytea columns
+                    pass
+            elif df[col].dtype == 'int64':
+                # BigQuery INT64 -> PostgreSQL bigint/numeric (already compatible)
+                pass
+            elif df[col].dtype == 'float64':
+                # BigQuery FLOAT64 -> PostgreSQL numeric (already compatible)
+                pass
+            elif df[col].dtype == 'bool':
+                # BigQuery BOOL -> PostgreSQL boolean (already compatible)
+                pass
+        
+        # Handle UUID columns (convert strings to UUID if needed)
+        uuid_columns = ['id', 'compilation_id', 'deployment_id', 'contract_id']
+        for col in uuid_columns:
+            if col in columns and df[col].dtype == 'object':
+                # UUIDs from BigQuery come as strings, which PostgreSQL can handle
+                pass
+        
         # Process in batches
         for i in range(0, total_rows, batch_size):
             batch_df = df.iloc[i:i + batch_size]
