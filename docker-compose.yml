@@ -65,7 +65,6 @@ services:
       INFURA_API_KEY: ${INFURA_API_KEY:-}
       DRPC_API_KEY: ${DRPC_API_KEY:-}
       ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
-      NODE_ENV: ${NODE_ENV:-development}
     volumes:
       - ./services/server/src/sourcify-chains-default.json:/home/app/services/server/dist/sourcify-chains.json:ro
       - ./services/server/src/config:/home/app/services/server/dist/config:ro
