@@ -4,7 +4,7 @@ const {
 } = require("../server/services/storageServices/identifiers");
 
 module.exports = {
-  serverUrl: "http://localhost:5555",
+  serverUrl: "http://172.16.1.22:5555",
   server: {
     port: 5555,
     maxFileSize: 30 * 1024 * 1024, // 30 MB

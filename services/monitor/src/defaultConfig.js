@@ -8,7 +8,7 @@ const defaultConfig = {
       retries: 5,
     },
   },
-  sourcifyServerURLs: ["https://sourcify.dev/server/"],
+  sourcifyServerURLs: ["http://172.16.1.22:5555"],
   sourcifyRequestOptions: {
     maxRetries: 3,
     retryDelay: 30000,

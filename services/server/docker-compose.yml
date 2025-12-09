@@ -47,7 +47,7 @@ services:
       # - ./src/config/local.js:/home/app/services/server/dist/config/local.js
       - ./src/config/default.js:/home/app/services/server/dist/config/default.js
       # Change your chains here
-      - ./src/sourcify-chains-example.json:/home/app/services/server/dist/sourcify-chains.json
+      - ./src/sourcify-chains-default.json:/home/app/services/server/dist/sourcify-chains.json
     depends_on:
       db:
         condition: service_started
