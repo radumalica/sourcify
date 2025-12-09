@@ -51,6 +51,33 @@ class BigQueryLoader:
         
         logger.info(f"Initialized BigQuery client for dataset: {self.dataset_project}.{self.dataset_id}")
 
+    def _get_order_by_column(self, table_name: str) -> str:
+        """
+        Get the column to use for ORDER BY based on table name.
+        Uses primary key or unique identifier for consistent pagination.
+        
+        Args:
+            table_name: Name of the BigQuery table
+            
+        Returns:
+            Column name to use for ORDER BY
+        """
+        # Map table names to their primary key / unique identifier
+        order_by_map = {
+            'public_code': 'code_hash',
+            'public_sources': 'source_hash',
+            'public_contracts': 'id',
+            'public_compiled_contracts': 'id',
+            'public_compiled_contracts_sources': 'id',
+            'public_contract_deployments': 'id',
+            'public_verified_contracts': 'id',
+            'public_sourcify_matches': 'id',
+            'public_signatures': 'id',
+            'public_compiled_contracts_signatures': 'id',
+        }
+        
+        return order_by_map.get(table_name, 'created_at')
+
     def query_table_chunked(
         self,
         table_name: str,
@@ -81,14 +108,20 @@ class BigQueryLoader:
         logger.info(f"Querying BigQuery table: {table_name}")
         
         # Use LIMIT/OFFSET pagination to avoid "response too large" errors
+        # IMPORTANT: Must ORDER BY to ensure consistent pagination
         offset = 0
         total_rows = 0
+        
+        # Determine ORDER BY column based on table
+        # Use primary key or unique column for consistent ordering
+        order_by_column = self._get_order_by_column(table_name)
         
         while True:
             query = f"""
                 SELECT *
                 FROM `{full_table_id}`
                 {where_clause}
+                ORDER BY {order_by_column}
                 LIMIT {batch_size}
                 OFFSET {offset}
             """
