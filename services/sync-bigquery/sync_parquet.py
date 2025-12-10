@@ -38,6 +38,31 @@ class ParquetSyncTracker:
     def __init__(self, conn):
         self.conn = conn
     
+    def reset_stuck_imports(self, timeout_minutes: int = 10):
+        """Reset imports that are stuck in downloading/importing status"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE parquet_sync_state
+                SET import_status = 'pending',
+                    error_message = 'Reset from stuck status after ' || %s || ' minutes'
+                WHERE import_status IN ('downloading', 'importing')
+                AND updated_at < NOW() - INTERVAL '%s minutes'
+                RETURNING file_path, category, import_status
+            """, (timeout_minutes, timeout_minutes))
+            
+            reset_files = cursor.fetchall()
+            self.conn.commit()
+            
+            if reset_files:
+                logger.warning(f"Reset {len(reset_files)} stuck imports:")
+                for file_path, category, status in reset_files:
+                    logger.warning(f"  - {file_path} (was {status})")
+            
+            return len(reset_files)
+        finally:
+            cursor.close()
+    
     def mark_file_downloading(self, file_path: str, category: str, manifest_timestamp: int, file_size: int = None):
         """Mark a file as being downloaded"""
         cursor = self.conn.cursor()
@@ -128,6 +153,37 @@ class ParquetSyncTracker:
             
             # File is imported if status is completed and timestamp matches or is newer
             return status == 'completed' and db_timestamp >= manifest_dt
+        finally:
+            cursor.close()
+    
+    def get_table_row_count(self, table_name: str) -> int:
+        """Get the number of rows in a table"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        finally:
+            cursor.close()
+    
+    def is_category_imported(self, category: str, manifest_timestamp: int) -> bool:
+        """Check if a category has been fully imported for this manifest"""
+        cursor = self.conn.cursor()
+        try:
+            # Check if all files for this category are marked as completed
+            cursor.execute("""
+                SELECT COUNT(*) as total,
+                       COUNT(CASE WHEN import_status = 'completed' THEN 1 END) as completed
+                FROM parquet_sync_state
+                WHERE category = %s
+            """, (category,))
+            
+            result = cursor.fetchone()
+            if not result or result[0] == 0:
+                return False
+            
+            total, completed = result
+            return total == completed and total > 0
         finally:
             cursor.close()
     
@@ -285,6 +341,11 @@ def sync_category_from_parquet(
     """
     logger.info(f"=== Syncing category: {category} ===")
     logger.info(f"Total files in category: {len(files)}")
+    
+    # Check if table already has data
+    existing_rows = tracker.get_table_row_count(category)
+    if existing_rows > 0:
+        logger.info(f"Table '{category}' currently contains {existing_rows:,} rows")
     
     # Create download directory
     os.makedirs(download_dir, exist_ok=True)
@@ -449,6 +510,26 @@ def main():
         
         logger.info(f"Manifest timestamp: {manifest_date} ({manifest_timestamp})")
         logger.info(f"Available categories: {', '.join(files_by_category.keys())}")
+        
+        # Reset any stuck imports from previous runs
+        logger.info("")
+        logger.info("Checking for stuck imports...")
+        stuck_count = tracker.reset_stuck_imports(timeout_minutes=10)
+        if stuck_count == 0:
+            logger.info("No stuck imports found")
+        logger.info("")
+        
+        # Show existing data summary
+        logger.info("=== Current database state ===")
+        for category in import_order:
+            try:
+                row_count = tracker.get_table_row_count(category)
+                cat_stats = tracker.get_category_stats(category)
+                if row_count > 0 or cat_stats['completed'] > 0:
+                    logger.info(f"  {category}: {row_count:,} rows | Tracking: {cat_stats['completed']}/{cat_stats['total']} files completed")
+            except Exception as e:
+                logger.debug(f"  {category}: Unable to check ({e})")
+        logger.info("")
         
         # Sync each category in order
         total_stats = {
