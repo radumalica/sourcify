@@ -89,6 +89,26 @@ services:
         condition: service_completed_successfully
     networks:
       - sourcify-network
+      - external_network
+    labels:
+      - "traefik.enable=true"
+
+      # HTTP router (SSL terminated at Traefik)
+      - "traefik.http.routers.server-repo.entrypoints=websecure"
+      - "traefik.http.routers.server-repo.rule=Host(`server.evmrepo.masternode.ro`)"
+      - "traefik.http.routers.server-repo.tls=true"
+      - "traefik.http.routers.server-repo.tls.certresolver=letsencrypt"
+
+      # Service definition (internal HTTP port)
+      - "traefik.http.services.server-repo.loadbalancer.server.port=5555"
+      - "traefik.docker.network=external_network"
+
+      # Optional: redirect HTTP -> HTTPS
+      - "traefik.http.routers.server-repo-http.entrypoints=web"
+      - "traefik.http.routers.server-repo-http.rule=Host(`server.evmrepo.masternode.ro`)"
+      - "traefik.http.routers.server-repo-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
 
   # 4byte signature service
   4byte:
@@ -112,6 +132,26 @@ services:
         condition: service_completed_successfully
     networks:
       - sourcify-network
+      - external_network
+    labels:
+      - "traefik.enable=true"
+
+      # HTTP router (SSL terminated at Traefik)
+      - "traefik.http.routers.4byte-repo.entrypoints=websecure"
+      - "traefik.http.routers.4byte-repo.rule=Host(`4byte-api.evmrepo.masternode.ro`)"
+      - "traefik.http.routers.4byte-repo.tls=true"
+      - "traefik.http.routers.4byte-repo.tls.certresolver=letsencrypt"
+
+      # Service definition (internal HTTP port)
+      - "traefik.http.services.4byte-repo.loadbalancer.server.port=4444"
+      - "traefik.docker.network=external_network"
+
+      # Optional: redirect HTTP -> HTTPS
+      - "traefik.http.routers.4byte-repo-http.entrypoints=web"
+      - "traefik.http.routers.4byte-repo-http.rule=Host(`4byte-api.evmrepo.masternode.ro`)"
+      - "traefik.http.routers.4byte-repo-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
 
   # Monitor service
   monitor:
@@ -244,3 +284,5 @@ volumes:
 networks:
   sourcify-network:
     driver: bridge
+  external_network:
+    external: true
