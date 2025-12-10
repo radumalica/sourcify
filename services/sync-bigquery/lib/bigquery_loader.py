@@ -63,18 +63,19 @@ class BigQueryLoader:
             Column name to use for ORDER BY
         """
         # Map table names to their primary key / unique identifier
-        # Note: Avoid using BYTES columns for ORDER BY as they're slow without indexes
+        # For public dataset: use created_at as it's simpler and likely has better performance
+        # than complex nested struct fields or byte columns
         order_by_map = {
-            'public_code': 'created_at',  # Changed from code_hash for better performance
-            'public_sources': 'created_at',  # Changed from source_hash for better performance
-            'public_contracts': 'id',
-            'public_compiled_contracts': 'id',
-            'public_compiled_contracts_sources': 'id',
-            'public_contract_deployments': 'id',
-            'public_verified_contracts': 'id',
-            'public_sourcify_matches': 'id',
-            'public_signatures': 'id',
-            'public_compiled_contracts_signatures': 'id',
+            'public_code': 'created_at',
+            'public_sources': 'created_at', 
+            'public_contracts': 'created_at',
+            'public_compiled_contracts': 'created_at',
+            'public_compiled_contracts_sources': 'created_at',
+            'public_contract_deployments': 'created_at',
+            'public_verified_contracts': 'created_at',
+            'public_sourcify_matches': 'created_at',
+            'public_signatures': 'created_at',
+            'public_compiled_contracts_signatures': 'created_at',
         }
         
         return order_by_map.get(table_name, 'created_at')
