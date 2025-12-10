@@ -529,12 +529,12 @@ class OptimizedDatabaseImporter:
                     # Check first non-null value to determine type
                     sample = df_copy[col].dropna().iloc[0] if not df_copy[col].dropna().empty else None
 
-                    if isinstance(sample, bytes):
+                    if isinstance(sample, bytes) or isinstance(sample, memoryview):
                         # Convert bytes to hex string with \x prefix for PostgreSQL COPY format
                         # In COPY text format, \x followed by hex digits is interpreted as bytea
                         # Handle mixed types: ensure all values are either bytes or None
                         def convert_to_hex_or_none(x):
-                            if pd.isna(x):
+                            if pd.isna(x) or x is None:
                                 return None
                             if isinstance(x, bytes):
                                 return '\\x' + x.hex()

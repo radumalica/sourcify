@@ -295,6 +295,53 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         # Replace pd.NA with None for all columns
         df[col] = df[col].replace({pd.NA: None})
     
+    # Special handling for bytea columns that might be base64 encoded or raw bytes
+    # BigQuery stores these as BYTES, but Parquet/pandas might convert them to base64 strings
+    import base64
+    bytea_columns_by_table = {
+        'contracts': ['creation_code_hash', 'runtime_code_hash'],
+        'compiled_contracts': ['creation_code_hash', 'runtime_code_hash'],
+        'code': ['code_hash', 'code_hash_keccak'],
+        'sources': ['source_hash', 'source_hash_keccak'],
+        'signatures': ['signature_hash_32'],
+        'compiled_contracts_signatures': ['signature_hash_32'],
+    }
+    
+    if table_name in bytea_columns_by_table:
+        for col in bytea_columns_by_table[table_name]:
+            if col in df.columns:
+                # Check what type we're getting
+                sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+                logger.info(f"Column '{col}': sample type={type(sample)}, value preview={repr(sample)[:100] if sample else None}")
+                
+                def ensure_bytes(x):
+                    if pd.isna(x) or x is None:
+                        return None
+                    if isinstance(x, bytes):
+                        return x  # Already bytes - use directly
+                    if isinstance(x, memoryview):
+                        return bytes(x)  # Convert memoryview to bytes
+                    if isinstance(x, str):
+                        # Could be base64 encoded - try to decode
+                        try:
+                            return base64.b64decode(x)
+                        except Exception as e:
+                            logger.warning(f"Failed to decode base64 in column '{col}': {e}")
+                            # Maybe it's hex encoded?
+                            if x.startswith('\\x') or x.startswith('0x'):
+                                try:
+                                    return bytes.fromhex(x.replace('\\x', '').replace('0x', ''))
+                                except:
+                                    pass
+                            return None
+                    logger.warning(f"Unexpected type {type(x)} in bytea column '{col}'")
+                    return None
+                
+                df[col] = df[col].apply(ensure_bytes)
+                # Verify
+                sample_after = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+                logger.info(f"Column '{col}' after conversion: type={type(sample_after)}, len={len(sample_after) if sample_after else 0}")
+
     # Clean up ALL object and string columns to ensure valid UTF-8 encoding
     # BUT: Skip columns that contain bytea (binary) data
     # This is critical because parquet files from BigQuery may contain invalid UTF-8 in text columns
