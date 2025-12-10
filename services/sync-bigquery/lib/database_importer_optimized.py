@@ -42,17 +42,18 @@ class OptimizedDatabaseImporter:
         self.index_state = IndexStateManager()
 
         # Define import order based on foreign key dependencies
+        # Order is critical: parent tables must be imported before child tables
         self.import_order = [
-            'code',
-            'sources',
-            'contracts',
-            'compiled_contracts',
-            'compiled_contracts_sources',
-            'contract_deployments',
-            'verified_contracts',
-            'sourcify_matches',
-            'signatures',
-            'compiled_contracts_signatures',
+            'code',                          # No FKs
+            'sources',                       # No FKs
+            'signatures',                    # No FKs (must be before compiled_contracts_signatures)
+            'contracts',                     # FK: code (creation_code_hash, runtime_code_hash)
+            'compiled_contracts',            # FK: code (creation_code_hash, runtime_code_hash)
+            'compiled_contracts_sources',    # FK: compiled_contracts, sources
+            'compiled_contracts_signatures', # FK: compiled_contracts, signatures
+            'contract_deployments',          # FK: contracts
+            'verified_contracts',            # FK: compiled_contracts, contract_deployments
+            'sourcify_matches',              # FK: verified_contracts
         ]
 
         # Apply performance optimizations
@@ -405,17 +406,24 @@ class OptimizedDatabaseImporter:
                 df[col] = df[col].replace({pd.NaT: None})
 
         # Filter out rows with NULL values in NOT NULL columns
+        # Note: Sourcify schema has some columns as NULLABLE that Verifier Alliance has as NOT NULL
+        # This mapping reflects the actual Sourcify database schema
         not_null_columns_by_table = {
             'code': ['code_hash', 'code_hash_keccak'],
             'sources': ['source_hash', 'source_hash_keccak', 'content'],
-            'contracts': ['creation_code_hash', 'runtime_code_hash'],
+            # contracts.creation_code_hash can be NULL in Sourcify schema
+            'contracts': ['runtime_code_hash'],
             'compiled_contracts': ['compiler', 'version', 'language', 'name', 'fully_qualified_name',
                                   'compiler_settings', 'compilation_artifacts', 'creation_code_hash',
                                   'creation_code_artifacts', 'runtime_code_hash', 'runtime_code_artifacts'],
             'compiled_contracts_sources': ['compilation_id', 'source_hash', 'path'],
-            'contract_deployments': ['chain_id', 'address', 'transaction_hash', 'block_number',
-                                    'transaction_index', 'deployer', 'contract_id'],
+            # In Sourcify: transaction_hash, block_number, transaction_index, deployer can be NULL
+            'contract_deployments': ['chain_id', 'address', 'contract_id'],
             'verified_contracts': ['deployment_id', 'compilation_id', 'creation_match', 'runtime_match'],
+            # Sourcify-specific tables
+            'sourcify_matches': ['verified_contract_id', 'metadata'],
+            'signatures': ['signature_hash_32', 'signature'],
+            'compiled_contracts_signatures': ['compilation_id', 'signature_hash_32', 'signature_type'],
         }
 
         if table_name in not_null_columns_by_table:
@@ -488,9 +496,11 @@ class OptimizedDatabaseImporter:
                     sample = df_copy[col].dropna().iloc[0] if not df_copy[col].dropna().empty else None
 
                     if isinstance(sample, bytes):
-                        # Convert bytes to hex string with \x prefix for PostgreSQL bytea
+                        # Convert bytes to hex string with \\x prefix for PostgreSQL COPY format
+                        # In COPY text format, we need \\x (escaped backslash) so PostgreSQL
+                        # interprets it as the bytea hex format \x when parsing
                         df_copy[col] = df_copy[col].apply(
-                            lambda x: '\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
+                            lambda x: '\\\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
                         )
                         bytea_columns.add(col)  # Mark as bytea to skip escaping
                     elif isinstance(sample, (dict, list)):
@@ -511,13 +521,20 @@ class OptimizedDatabaseImporter:
 
             # Escape special characters in string columns for PostgreSQL COPY format
             # PostgreSQL COPY uses backslash escapes: \t, \n, \r, \\
-            # Skip bytea columns (already in hex format)
+            # Skip bytea columns (already in hex format with \\x prefix)
             for col in columns:
                 if col not in bytea_columns and df_copy[col].dtype == 'object':
-                    df_copy[col] = df_copy[col].apply(
-                        lambda x: x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-                        if isinstance(x, str) else x
-                    )
+                    def escape_for_copy(x):
+                        if not isinstance(x, str):
+                            return x
+                        # Skip strings that look like bytea hex format (start with \\x)
+                        # These are already properly formatted for PostgreSQL COPY
+                        if x.startswith('\\\\x'):
+                            return x
+                        # Escape special characters for COPY format
+                        return x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+
+                    df_copy[col] = df_copy[col].apply(escape_for_copy)
 
             # Prepare CSV buffer for PostgreSQL COPY
             # Use QUOTE_NONE to prevent quoting (critical for bytea NULL handling)
@@ -551,18 +568,36 @@ class OptimizedDatabaseImporter:
             # Insert from temp table to actual table with conflict handling
             column_list = ', '.join(columns)
 
+            # Define conflict targets (unique constraints) for each table
+            # These are the "pseudo primary keys" that define uniqueness
+            conflict_targets = {
+                'code': '(code_hash)',
+                'sources': '(source_hash)',
+                'contracts': '(creation_code_hash, runtime_code_hash)',
+                'compiled_contracts': '(compiler, version, language, creation_code_hash, runtime_code_hash)',
+                'compiled_contracts_sources': '(compilation_id, path)',
+                'contract_deployments': '(chain_id, address, transaction_hash, contract_id)',
+                'verified_contracts': '(compilation_id, deployment_id)',
+                'sourcify_matches': '(verified_contract_id)',
+                'signatures': '(signature_hash_32)',
+                'compiled_contracts_signatures': '(compilation_id, signature_hash_32, signature_type)',
+            }
+
             # Determine conflict resolution
+            conflict_target = conflict_targets.get(table_name, '')
             if table_name in ['code', 'sources', 'contracts', 'compiled_contracts',
-                              'compiled_contracts_sources', 'contract_deployments']:
-                conflict_clause = "ON CONFLICT DO NOTHING"
+                              'compiled_contracts_sources', 'contract_deployments',
+                              'signatures', 'compiled_contracts_signatures']:
+                # Immutable data: skip duplicates
+                conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
             else:
-                # For mutable data: UPDATE on conflict
-                update_cols = [col for col in columns if col not in ['created_at', 'created_by', 'updated_at', 'updated_by']]
-                if update_cols:
+                # For mutable data (verified_contracts, sourcify_matches): UPDATE on conflict
+                update_cols = [col for col in columns if col not in ['id', 'created_at', 'created_by', 'updated_at', 'updated_by']]
+                if update_cols and conflict_target:
                     update_clause = ', '.join([f"{col} = EXCLUDED.{col}" for col in update_cols])
-                    conflict_clause = f"ON CONFLICT DO UPDATE SET {update_clause}"
+                    conflict_clause = f"ON CONFLICT {conflict_target} DO UPDATE SET {update_clause}"
                 else:
-                    conflict_clause = "ON CONFLICT DO NOTHING"
+                    conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
 
             logger.debug(f"Inserting from temporary table into {table_name}...")
             start_time = time.time()
@@ -621,17 +656,33 @@ class OptimizedDatabaseImporter:
                 column_list = ', '.join(columns)
                 placeholders = ', '.join(['%s'] * len(columns))
 
+                # Define conflict targets (unique constraints) for each table
+                conflict_targets = {
+                    'code': '(code_hash)',
+                    'sources': '(source_hash)',
+                    'contracts': '(creation_code_hash, runtime_code_hash)',
+                    'compiled_contracts': '(compiler, version, language, creation_code_hash, runtime_code_hash)',
+                    'compiled_contracts_sources': '(compilation_id, path)',
+                    'contract_deployments': '(chain_id, address, transaction_hash, contract_id)',
+                    'verified_contracts': '(compilation_id, deployment_id)',
+                    'sourcify_matches': '(verified_contract_id)',
+                    'signatures': '(signature_hash_32)',
+                    'compiled_contracts_signatures': '(compilation_id, signature_hash_32, signature_type)',
+                }
+
                 # Conflict handling
+                conflict_target = conflict_targets.get(table_name, '')
                 if table_name in ['code', 'sources', 'contracts', 'compiled_contracts',
-                                  'compiled_contracts_sources', 'contract_deployments']:
-                    conflict_clause = "ON CONFLICT DO NOTHING"
+                                  'compiled_contracts_sources', 'contract_deployments',
+                                  'signatures', 'compiled_contracts_signatures']:
+                    conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
                 else:
-                    update_cols = [col for col in columns if col not in ['created_at', 'created_by', 'updated_at', 'updated_by']]
-                    if update_cols:
+                    update_cols = [col for col in columns if col not in ['id', 'created_at', 'created_by', 'updated_at', 'updated_by']]
+                    if update_cols and conflict_target:
                         update_clause = ', '.join([f"{col} = EXCLUDED.{col}" for col in update_cols])
-                        conflict_clause = f"ON CONFLICT DO UPDATE SET {update_clause}"
+                        conflict_clause = f"ON CONFLICT {conflict_target} DO UPDATE SET {update_clause}"
                     else:
-                        conflict_clause = "ON CONFLICT DO NOTHING"
+                        conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
 
                 query = f"""
                     INSERT INTO {table_name} ({column_list})

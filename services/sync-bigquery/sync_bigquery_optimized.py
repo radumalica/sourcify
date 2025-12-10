@@ -153,6 +153,7 @@ class ParallelSyncWorker:
         self.total_imported = 0
         self.thread = None
         self.error = None
+        self.error_count = 0
         self.shutdown_event = threading.Event()
 
     def start(self):
@@ -179,6 +180,7 @@ class ParallelSyncWorker:
             )
 
             while not self.shutdown_event.is_set():
+                batch = None
                 try:
                     # Get batch from queue (with timeout to check for shutdown)
                     batch = self.batch_queue.get(timeout=1)
@@ -188,6 +190,7 @@ class ParallelSyncWorker:
 
                     # Check shutdown before processing
                     if self.shutdown_event.is_set():
+                        self.batch_queue.task_done()
                         break
 
                     # Import batch
@@ -211,10 +214,25 @@ class ParallelSyncWorker:
                 except queue.Empty:
                     continue
                 except Exception as e:
+                    # Always mark batch as done to avoid deadlock
+                    if batch is not None:
+                        try:
+                            self.batch_queue.task_done()
+                        except ValueError:
+                            pass  # Already done
+
                     if not self.shutdown_event.is_set():
                         logger.error(f"Error in worker thread: {e}", exc_info=True)
                         self.error = e
-                    break
+                        self.error_count += 1
+                        # Don't break - continue processing other batches
+                        # This allows the sync to continue with remaining data
+                        # The error is recorded and will be reported at the end
+                        if self.error_count >= 3:
+                            logger.error(f"Worker encountered {self.error_count} consecutive errors, stopping")
+                            break
+                        logger.warning(f"Worker will continue processing (error {self.error_count}/3)")
+                        continue
 
         except Exception as e:
             if not self.shutdown_event.is_set():
@@ -377,9 +395,9 @@ def sync_table_parallel(
         # Wait for workers to finish (with timeout)
         for i, worker in enumerate(workers):
             worker.join(timeout=5)
-            if worker.error and not shutdown_requested:
-                logger.error(f"Worker {i+1} encountered error: {worker.error}")
-                stats['errors'] += 1
+            if worker.error_count > 0 and not shutdown_requested:
+                logger.warning(f"Worker {i+1} encountered {worker.error_count} error(s), last error: {worker.error}")
+                stats['errors'] += worker.error_count
             stats['rows_imported'] += worker.total_imported
 
         if not shutdown_requested:
