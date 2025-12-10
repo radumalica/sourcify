@@ -63,9 +63,10 @@ class BigQueryLoader:
             Column name to use for ORDER BY
         """
         # Map table names to their primary key / unique identifier
+        # Note: Avoid using BYTES columns for ORDER BY as they're slow without indexes
         order_by_map = {
-            'public_code': 'code_hash',
-            'public_sources': 'source_hash',
+            'public_code': 'created_at',  # Changed from code_hash for better performance
+            'public_sources': 'created_at',  # Changed from source_hash for better performance
             'public_contracts': 'id',
             'public_compiled_contracts': 'id',
             'public_compiled_contracts_sources': 'id',
