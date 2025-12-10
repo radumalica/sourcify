@@ -54,7 +54,7 @@ MANIFEST_URL=https://export.sourcify.dev/manifest.json
 PARQUET_BASE_URL=https://export.sourcify.dev
 
 # Temporary directory for downloaded files (deleted after import)
-DOWNLOAD_DIR=/tmp/parquet
+DOWNLOAD_DIR=/app/parquet
 
 # Use PostgreSQL COPY instead of INSERT (recommended)
 USE_COPY=true

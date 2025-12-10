@@ -363,7 +363,7 @@ def main():
     # Configuration
     manifest_url = os.getenv('MANIFEST_URL', 'https://export.sourcify.dev/manifest.json')
     base_url = os.getenv('PARQUET_BASE_URL', 'https://export.sourcify.dev')
-    download_dir = os.getenv('DOWNLOAD_DIR', '/tmp/parquet')
+    download_dir = os.getenv('DOWNLOAD_DIR', '/app/parquet')
     use_copy = os.getenv('USE_COPY', 'true').lower() == 'true'
     manage_indexes = os.getenv('MANAGE_INDEXES', 'true').lower() == 'true'
     

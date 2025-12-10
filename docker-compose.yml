@@ -221,12 +221,12 @@ services:
       # Parquet sync settings
       MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
       PARQUET_BASE_URL: ${PARQUET_BASE_URL:-https://export.sourcify.dev}
-      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/tmp/parquet}
+      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/app/parquet}
       USE_COPY: ${SYNC_USE_COPY:-true}
       MANAGE_INDEXES: ${SYNC_MANAGE_INDEXES:-true}
     volumes:
       - ./services/sync-bigquery/logs:/app/logs
-      - /tmp/parquet:/tmp/parquet  # Temporary storage for downloaded files
+      - parquet_temp:/app/parquet  # Temporary storage for downloaded files
     depends_on:
       db:
         condition: service_healthy
@@ -239,6 +239,7 @@ services:
 
 volumes:
   postgres_data:
+  parquet_temp:
 
 networks:
   sourcify-network:
