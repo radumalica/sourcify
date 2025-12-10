@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-BigQuery Sync Scheduler
+Parquet Sync Scheduler
 
-Runs the BigQuery sync on a schedule (default: daily at 2 AM).
+Runs the Parquet file sync from manifest on a schedule (default: daily at 2 AM).
+Checks for new parquet files in the manifest and downloads/imports them.
 """
 
 import os
@@ -27,15 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 def run_sync():
-    """Execute the BigQuery sync"""
+    """Execute the Parquet sync from manifest"""
     logger.info("=" * 80)
-    logger.info("Starting scheduled BigQuery sync (optimized)")
+    logger.info("Starting scheduled Parquet sync from manifest")
     logger.info("=" * 80)
 
     try:
-        # Run the optimized sync script for better performance
+        # Run the parquet sync script to download and import new files
         result = subprocess.run(
-            ['python', '/app/sync_bigquery_optimized.py'],
+            ['python', '/app/sync_parquet.py'],
             capture_output=True,
             text=True
         )
@@ -59,7 +60,7 @@ def main():
     sync_schedule = os.getenv('SYNC_SCHEDULE', '0 2 * * *')
     
     logger.info("=" * 80)
-    logger.info("BigQuery Sync Scheduler Started")
+    logger.info("Parquet Sync Scheduler Started")
     logger.info("=" * 80)
     logger.info(f"Schedule: {sync_schedule}")
     
