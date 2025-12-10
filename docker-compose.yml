@@ -135,35 +135,6 @@ services:
     networks:
       - sourcify-network
 
-  # BigQuery sync service - Simple (single-threaded)
-  # Use sync-bigquery-optimized for multi-threaded processing (faster for large datasets)
-  sync-bigquery:
-    build:
-      context: ./services/sync-bigquery
-      dockerfile: Dockerfile
-    environment:
-      POSTGRES_HOST: db
-      POSTGRES_DB: ${POSTGRES_DB:-sourcify}
-      POSTGRES_USER: ${POSTGRES_USER:-sourcify}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
-      POSTGRES_PORT: 5432
-      BATCH_SIZE: ${SYNC_BATCH_SIZE:-10000}
-      SYNC_MODE: ${SYNC_MODE:-full}
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-n8n-self-468309}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/gcp-key.json}
-    volumes:
-      - ./services/sync-bigquery/logs:/app/logs
-      - ${GCP_KEY_PATH:-./services/sync-bigquery/gcp-key.json}:/app/gcp-key.json:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      migrations:
-        condition: service_completed_successfully
-    networks:
-      - sourcify-network
-    profiles:
-      - manual
-
   # BigQuery sync service - OPTIMIZED (10-50x faster)
   # Uses COPY instead of INSERT, index management, parallel processing
   # Recommended for bulk imports of 1M+ rows
