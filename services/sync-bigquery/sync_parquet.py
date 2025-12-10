@@ -39,23 +39,37 @@ class ParquetSyncTracker:
         self.conn = conn
     
     def reset_stuck_imports(self, timeout_minutes: int = 10):
-        """Reset imports that are stuck in downloading/importing status"""
+        """Reset imports that are stuck in downloading/importing/failed status"""
         cursor = self.conn.cursor()
         try:
+            # Reset failed imports immediately (no timeout)
             cursor.execute("""
                 UPDATE parquet_sync_state
                 SET import_status = 'pending',
-                    error_message = 'Reset from stuck status after ' || %s || ' minutes'
+                    error_message = 'Retry after previous failure'
+                WHERE import_status = 'failed'
+                RETURNING file_path, category, import_status
+            """)
+            
+            failed_files = cursor.fetchall()
+            
+            # Reset stuck downloading/importing (with timeout)
+            cursor.execute("""
+                UPDATE parquet_sync_state
+                SET import_status = 'pending',
+                    error_message = 'Reset from stuck status after timeout'
                 WHERE import_status IN ('downloading', 'importing')
                 AND updated_at < NOW() - INTERVAL '%s minutes'
                 RETURNING file_path, category, import_status
-            """, (timeout_minutes, timeout_minutes))
+            """ % timeout_minutes, ())
             
-            reset_files = cursor.fetchall()
+            stuck_files = cursor.fetchall()
+            
+            reset_files = failed_files + stuck_files
             self.conn.commit()
             
             if reset_files:
-                logger.warning(f"Reset {len(reset_files)} stuck imports:")
+                logger.warning(f"Reset {len(reset_files)} imports for retry:")
                 for file_path, category, status in reset_files:
                     logger.warning(f"  - {file_path} (was {status})")
             
@@ -127,11 +141,11 @@ class ParquetSyncTracker:
             cursor.close()
     
     def is_file_imported(self, file_path: str, manifest_timestamp: int) -> bool:
-        """Check if a file has already been imported for this manifest version"""
+        """Check if a file has already been imported"""
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
-                SELECT import_status, manifest_timestamp 
+                SELECT import_status
                 FROM parquet_sync_state
                 WHERE file_path = %s
             """, (file_path,))
@@ -140,19 +154,12 @@ class ParquetSyncTracker:
             if not result:
                 return False
             
-            status, db_timestamp = result
+            status = result[0]
             
-            # Convert manifest timestamp (milliseconds) to datetime
-            # Use UTC timezone to match PostgreSQL timestamp behavior
-            manifest_dt = datetime.fromtimestamp(manifest_timestamp / 1000.0, tz=timezone.utc)
-            
-            # Ensure db_timestamp is timezone-aware for comparison
-            # If it's naive, assume it's UTC
-            if db_timestamp.tzinfo is None:
-                db_timestamp = db_timestamp.replace(tzinfo=timezone.utc)
-            
-            # File is imported if status is completed and timestamp matches or is newer
-            return status == 'completed' and db_timestamp >= manifest_dt
+            # File is imported if status is completed
+            # We don't check manifest timestamp because parquet files are immutable
+            # Once a file is successfully imported, we don't need to re-import it
+            return status == 'completed'
         finally:
             cursor.close()
     
