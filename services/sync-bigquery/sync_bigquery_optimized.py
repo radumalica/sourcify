@@ -143,13 +143,15 @@ class ParallelSyncWorker:
         table_name: str,
         conn_params: Dict,
         monitor: PerformanceMonitor,
-        use_copy: bool = True
+        use_copy: bool = True,
+        use_binary: bool = True
     ):
         self.batch_queue = batch_queue
         self.table_name = table_name
         self.conn_params = conn_params
         self.monitor = monitor
         self.use_copy = use_copy
+        self.use_binary = use_binary
         self.total_imported = 0
         self.thread = None
         self.error = None
@@ -176,7 +178,8 @@ class ParallelSyncWorker:
             importer = OptimizedDatabaseImporter(
                 conn,
                 use_copy=self.use_copy,
-                manage_indexes=False  # Indexes managed at table level
+                manage_indexes=False,  # Indexes managed at table level
+                use_binary=self.use_binary
             )
 
             while not self.shutdown_event.is_set():
@@ -287,6 +290,7 @@ def sync_table_parallel(
     batch_size: int,
     num_workers: int = 2,
     use_copy: bool = True,
+    use_binary: bool = True,
     manage_indexes: bool = True
 ) -> dict:
     """
@@ -301,6 +305,7 @@ def sync_table_parallel(
         batch_size: Batch size for BigQuery queries
         num_workers: Number of parallel import workers
         use_copy: Use COPY instead of INSERT
+        use_binary: Use binary COPY format (faster, no escaping issues)
         manage_indexes: Drop/recreate indexes
 
     Returns:
@@ -343,7 +348,8 @@ def sync_table_parallel(
                 local_table_name,
                 conn_params,
                 monitor,
-                use_copy=use_copy
+                use_copy=use_copy,
+                use_binary=use_binary
             )
             worker.start()
             workers.append(worker)
@@ -477,6 +483,7 @@ def main():
     batch_size = int(os.getenv('BATCH_SIZE', '100000'))  # Increased from 10k
     num_workers = int(os.getenv('NUM_WORKERS', '3'))  # Parallel import workers
     use_copy = os.getenv('USE_COPY', 'true').lower() == 'true'
+    use_binary = os.getenv('USE_BINARY', 'true').lower() == 'true'  # Binary COPY format (faster)
     manage_indexes = os.getenv('MANAGE_INDEXES', 'true').lower() == 'true'
     gcp_project_id = os.getenv('GCP_PROJECT_ID', None)
 
@@ -484,6 +491,7 @@ def main():
     logger.info(f"  Batch size: {batch_size:,}")
     logger.info(f"  Worker threads: {num_workers}")
     logger.info(f"  Use COPY: {use_copy}")
+    logger.info(f"  Use binary format: {use_binary}")
     logger.info(f"  Manage indexes: {manage_indexes}")
     logger.info(f"  GCP Project ID: {gcp_project_id or 'None'}")
 
@@ -544,6 +552,7 @@ def main():
                 batch_size,
                 num_workers=num_workers,
                 use_copy=use_copy,
+                use_binary=use_binary,
                 manage_indexes=manage_indexes
             )
 

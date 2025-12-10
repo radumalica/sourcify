@@ -3,17 +3,25 @@ Optimized Database Importer
 
 High-performance importer using PostgreSQL COPY, index management, and parallel processing.
 Designed for bulk loading millions of rows efficiently.
+
+Supports two COPY modes:
+- TEXT format: Compatible but requires careful escaping
+- BINARY format: Faster, no escaping needed, handles bytea natively
 """
 
 import logging
 import psycopg2
 from psycopg2 import sql
 import pandas as pd
-from typing import List, Dict, Optional, Set
-from io import StringIO
+from typing import List, Dict, Optional, Set, Any, Tuple
+from io import StringIO, BytesIO
 import json
 import time
 import csv
+import struct
+import uuid
+from decimal import Decimal
+from datetime import datetime, date
 from .index_state_manager import IndexStateManager
 
 logger = logging.getLogger(__name__)
@@ -22,7 +30,11 @@ logger = logging.getLogger(__name__)
 class OptimizedDatabaseImporter:
     """Optimized importer for PostgreSQL with COPY and index management"""
 
-    def __init__(self, conn, use_copy: bool = True, manage_indexes: bool = True):
+    # PostgreSQL binary COPY format signature
+    PGCOPY_SIGNATURE = b'PGCOPY\n\xff\r\n\x00'
+
+    def __init__(self, conn, use_copy: bool = True, manage_indexes: bool = True,
+                 use_binary: bool = True):
         """
         Initialize the optimized database importer.
 
@@ -30,9 +42,11 @@ class OptimizedDatabaseImporter:
             conn: psycopg2 connection object
             use_copy: Use COPY instead of INSERT (much faster)
             manage_indexes: Automatically drop/recreate indexes during bulk import
+            use_binary: Use binary COPY format (faster, no escaping issues)
         """
         self.conn = conn
         self.use_copy = use_copy
+        self.use_binary = use_binary
         self.manage_indexes = manage_indexes
 
         # Track which indexes have been dropped (in-memory)
@@ -371,9 +385,12 @@ class OptimizedDatabaseImporter:
         total_rows = len(df)
         columns = columns_to_import
 
-        # Import using COPY or INSERT
+        # Import using COPY (binary or text) or INSERT
         if self.use_copy:
-            return self._import_using_copy(df, table_name, columns)
+            if self.use_binary:
+                return self._import_using_binary_copy(df, table_name, columns)
+            else:
+                return self._import_using_copy(df, table_name, columns)
         else:
             return self._import_using_insert(df, table_name, columns, batch_size)
 
@@ -406,21 +423,23 @@ class OptimizedDatabaseImporter:
                 df[col] = df[col].replace({pd.NaT: None})
 
         # Filter out rows with NULL values in NOT NULL columns
-        # Note: Sourcify schema has some columns as NULLABLE that Verifier Alliance has as NOT NULL
-        # This mapping reflects the actual Sourcify database schema
+        # Based on official Sourcify schema from dbdiagram
         not_null_columns_by_table = {
             'code': ['code_hash', 'code_hash_keccak'],
             'sources': ['source_hash', 'source_hash_keccak', 'content'],
-            # contracts.creation_code_hash can be NULL in Sourcify schema
+            # contracts.creation_code_hash can be NULL
             'contracts': ['runtime_code_hash'],
+            # compiled_contracts: creation_code_hash and creation_code_artifacts can be NULL
             'compiled_contracts': ['compiler', 'version', 'language', 'name', 'fully_qualified_name',
-                                  'compiler_settings', 'compilation_artifacts', 'creation_code_hash',
-                                  'creation_code_artifacts', 'runtime_code_hash', 'runtime_code_artifacts'],
+                                  'compiler_settings', 'compilation_artifacts',
+                                  'runtime_code_hash', 'runtime_code_artifacts'],
             'compiled_contracts_sources': ['compilation_id', 'source_hash', 'path'],
-            # In Sourcify: transaction_hash, block_number, transaction_index, deployer can be NULL
+            # contract_deployments: only chain_id, address, contract_id are NOT NULL
             'contract_deployments': ['chain_id', 'address', 'contract_id'],
+            # verified_contracts: id is bigint (not uuid), deployment_id, compilation_id, creation_match, runtime_match are NOT NULL
             'verified_contracts': ['deployment_id', 'compilation_id', 'creation_match', 'runtime_match'],
-            # Sourcify-specific tables
+            # sourcify_matches: id and verified_contract_id are bigint, metadata is json (not jsonb)
+            # creation_match and runtime_match are varchar (not boolean)
             'sourcify_matches': ['verified_contract_id', 'metadata'],
             'signatures': ['signature_hash_32', 'signature'],
             'compiled_contracts_signatures': ['compilation_id', 'signature_hash_32', 'signature_type'],
@@ -496,11 +515,10 @@ class OptimizedDatabaseImporter:
                     sample = df_copy[col].dropna().iloc[0] if not df_copy[col].dropna().empty else None
 
                     if isinstance(sample, bytes):
-                        # Convert bytes to hex string with \\x prefix for PostgreSQL COPY format
-                        # In COPY text format, we need \\x (escaped backslash) so PostgreSQL
-                        # interprets it as the bytea hex format \x when parsing
+                        # Convert bytes to hex string with \x prefix for PostgreSQL COPY format
+                        # In COPY text format, \x followed by hex digits is interpreted as bytea
                         df_copy[col] = df_copy[col].apply(
-                            lambda x: '\\\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
+                            lambda x: '\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
                         )
                         bytea_columns.add(col)  # Mark as bytea to skip escaping
                     elif isinstance(sample, (dict, list)):
@@ -521,17 +539,14 @@ class OptimizedDatabaseImporter:
 
             # Escape special characters in string columns for PostgreSQL COPY format
             # PostgreSQL COPY uses backslash escapes: \t, \n, \r, \\
-            # Skip bytea columns (already in hex format with \\x prefix)
+            # Skip bytea columns (tracked in bytea_columns set - they use \x hex format)
             for col in columns:
                 if col not in bytea_columns and df_copy[col].dtype == 'object':
                     def escape_for_copy(x):
                         if not isinstance(x, str):
                             return x
-                        # Skip strings that look like bytea hex format (start with \\x)
-                        # These are already properly formatted for PostgreSQL COPY
-                        if x.startswith('\\\\x'):
-                            return x
                         # Escape special characters for COPY format
+                        # Note: bytea columns are already excluded via bytea_columns set
                         return x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
 
                     df_copy[col] = df_copy[col].apply(escape_for_copy)
@@ -568,19 +583,18 @@ class OptimizedDatabaseImporter:
             # Insert from temp table to actual table with conflict handling
             column_list = ', '.join(columns)
 
-            # Define conflict targets (unique constraints) for each table
-            # These are the "pseudo primary keys" that define uniqueness
+            # Define conflict targets based on primary keys from official Sourcify schema
             conflict_targets = {
-                'code': '(code_hash)',
-                'sources': '(source_hash)',
-                'contracts': '(creation_code_hash, runtime_code_hash)',
-                'compiled_contracts': '(compiler, version, language, creation_code_hash, runtime_code_hash)',
-                'compiled_contracts_sources': '(compilation_id, path)',
-                'contract_deployments': '(chain_id, address, transaction_hash, contract_id)',
-                'verified_contracts': '(compilation_id, deployment_id)',
-                'sourcify_matches': '(verified_contract_id)',
-                'signatures': '(signature_hash_32)',
-                'compiled_contracts_signatures': '(compilation_id, signature_hash_32, signature_type)',
+                'code': '(code_hash)',                    # PK: code_hash bytea
+                'sources': '(source_hash)',              # PK: source_hash bytea
+                'signatures': '(signature_hash_32)',     # PK: signature_hash_32 bytea
+                'contracts': '(id)',                     # PK: id uuid
+                'compiled_contracts': '(id)',            # PK: id uuid
+                'compiled_contracts_sources': '(id)',    # PK: id uuid
+                'compiled_contracts_signatures': '(id)', # PK: id uuid
+                'contract_deployments': '(id)',          # PK: id uuid
+                'verified_contracts': '(id)',            # PK: id bigint
+                'sourcify_matches': '(id)',              # PK: id bigint
             }
 
             # Determine conflict resolution
@@ -629,6 +643,283 @@ class OptimizedDatabaseImporter:
         finally:
             cursor.close()
 
+    def _import_using_binary_copy(self, df: pd.DataFrame, table_name: str, columns: List[str]) -> int:
+        """
+        Import using PostgreSQL binary COPY format - fastest method, no escaping needed.
+
+        Binary format advantages:
+        - No text encoding/escaping issues (bytea with null bytes works perfectly)
+        - Faster parsing on PostgreSQL side
+        - More compact representation
+
+        Args:
+            df: DataFrame to import (should have original Python types, not string-converted)
+            table_name: Target table name
+            columns: List of columns
+
+        Returns:
+            Number of rows imported
+        """
+        cursor = self.conn.cursor()
+        temp_table = f"temp_{table_name}_{abs(hash(time.time())) % 10000000000}"
+
+        try:
+            # Create temporary table with same structure
+            logger.debug(f"Creating temporary table {temp_table}...")
+            cursor.execute(f"""
+                CREATE TEMP TABLE {temp_table}
+                (LIKE {table_name} INCLUDING DEFAULTS)
+                ON COMMIT DROP
+            """)
+
+            # Build binary buffer
+            logger.debug(f"Building binary buffer for {len(df):,} rows...")
+            start_time = time.time()
+
+            buffer = BytesIO()
+
+            # Write PGCOPY header
+            buffer.write(self.PGCOPY_SIGNATURE)
+            buffer.write(struct.pack('>I', 0))  # flags (no OIDs)
+            buffer.write(struct.pack('>I', 0))  # header extension length
+
+            num_columns = len(columns)
+
+            # Convert DataFrame rows to binary format
+            for _, row in df.iterrows():
+                # Write number of fields in this row
+                buffer.write(struct.pack('>H', num_columns))
+
+                for col in columns:
+                    value = row[col]
+                    self._write_binary_value(buffer, value)
+
+            # Write trailer
+            buffer.write(struct.pack('>h', -1))
+
+            buffer_size = buffer.tell()
+            buffer.seek(0)
+
+            build_time = time.time() - start_time
+            logger.debug(f"Binary buffer built in {build_time:.2f}s ({buffer_size / 1024 / 1024:.1f} MB)")
+
+            # COPY binary data into temporary table
+            logger.debug(f"Copying {len(df):,} rows to temporary table (binary)...")
+            start_time = time.time()
+
+            cursor.copy_expert(
+                f"COPY {temp_table} ({', '.join(columns)}) FROM STDIN WITH BINARY",
+                buffer
+            )
+
+            copy_time = time.time() - start_time
+            logger.debug(f"Binary COPY completed in {copy_time:.2f}s ({len(df)/copy_time:.0f} rows/sec)")
+
+            # Insert from temp table to actual table with conflict handling
+            column_list = ', '.join(columns)
+
+            # Define conflict targets based on primary keys from official Sourcify schema
+            # For tables with natural keys (code, sources, signatures): use the natural key
+            # For tables with surrogate keys (id): use the id since BigQuery includes it
+            conflict_targets = {
+                'code': '(code_hash)',                    # PK: code_hash bytea
+                'sources': '(source_hash)',              # PK: source_hash bytea
+                'signatures': '(signature_hash_32)',     # PK: signature_hash_32 bytea
+                'contracts': '(id)',                     # PK: id uuid
+                'compiled_contracts': '(id)',            # PK: id uuid
+                'compiled_contracts_sources': '(id)',    # PK: id uuid
+                'compiled_contracts_signatures': '(id)', # PK: id uuid
+                'contract_deployments': '(id)',          # PK: id uuid
+                'verified_contracts': '(id)',            # PK: id bigint
+                'sourcify_matches': '(id)',              # PK: id bigint
+            }
+
+            conflict_target = conflict_targets.get(table_name, '')
+            if table_name in ['code', 'sources', 'contracts', 'compiled_contracts',
+                              'compiled_contracts_sources', 'contract_deployments',
+                              'signatures', 'compiled_contracts_signatures']:
+                conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
+            else:
+                update_cols = [col for col in columns if col not in ['id', 'created_at', 'created_by', 'updated_at', 'updated_by']]
+                if update_cols and conflict_target:
+                    update_clause = ', '.join([f"{col} = EXCLUDED.{col}" for col in update_cols])
+                    conflict_clause = f"ON CONFLICT {conflict_target} DO UPDATE SET {update_clause}"
+                else:
+                    conflict_clause = f"ON CONFLICT {conflict_target} DO NOTHING" if conflict_target else "ON CONFLICT DO NOTHING"
+
+            logger.debug(f"Inserting from temporary table into {table_name}...")
+            start_time = time.time()
+
+            cursor.execute(f"""
+                INSERT INTO {table_name} ({column_list})
+                SELECT {column_list}
+                FROM {temp_table}
+                {conflict_clause}
+            """)
+
+            rows_imported = cursor.rowcount
+            insert_time = time.time() - start_time
+
+            self.conn.commit()
+
+            total_time = build_time + copy_time + insert_time
+            logger.info(
+                f"Imported {rows_imported:,} rows into {table_name} in {total_time:.2f}s "
+                f"({rows_imported/total_time:.0f} rows/sec) [binary COPY]"
+            )
+
+            return rows_imported
+
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"Binary COPY failed: {e}. Falling back to text COPY...")
+            # Fall back to text COPY
+            try:
+                cursor.close()
+            except:
+                pass
+            return self._import_using_copy(df, table_name, columns)
+        finally:
+            try:
+                cursor.close()
+            except:
+                pass
+
+    def _write_binary_value(self, buffer: BytesIO, value: Any) -> None:
+        """
+        Write a single value in PostgreSQL binary COPY format.
+
+        Format: 4-byte length (big-endian) followed by raw bytes
+        NULL is represented as length -1
+
+        Args:
+            buffer: BytesIO buffer to write to
+            value: Value to encode
+        """
+        # Handle NULL
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            buffer.write(struct.pack('>i', -1))
+            return
+
+        # Handle bytes (bytea) - write directly
+        if isinstance(value, bytes):
+            buffer.write(struct.pack('>i', len(value)))
+            buffer.write(value)
+            return
+
+        # Handle memoryview (BigQuery often returns this)
+        if isinstance(value, memoryview):
+            data = bytes(value)
+            buffer.write(struct.pack('>i', len(data)))
+            buffer.write(data)
+            return
+
+        # Handle string (text, varchar, json)
+        if isinstance(value, str):
+            encoded = value.encode('utf-8')
+            buffer.write(struct.pack('>i', len(encoded)))
+            buffer.write(encoded)
+            return
+
+        # Handle boolean
+        if isinstance(value, bool):
+            buffer.write(struct.pack('>i', 1))
+            buffer.write(b'\x01' if value else b'\x00')
+            return
+
+        # Handle integers
+        if isinstance(value, int):
+            # PostgreSQL bigint is 8 bytes
+            buffer.write(struct.pack('>i', 8))
+            buffer.write(struct.pack('>q', value))
+            return
+
+        # Handle float
+        if isinstance(value, float):
+            # PostgreSQL double precision is 8 bytes
+            buffer.write(struct.pack('>i', 8))
+            buffer.write(struct.pack('>d', value))
+            return
+
+        # Handle Decimal (numeric)
+        # PostgreSQL binary numeric format is complex, so we convert to int if possible
+        # This works for block_number, transaction_index which are whole numbers
+        if isinstance(value, Decimal):
+            # Check if it's a whole number that fits in int64
+            if value == value.to_integral_value() and -2**63 <= value <= 2**63-1:
+                # Send as bigint - PostgreSQL will cast to numeric
+                int_val = int(value)
+                buffer.write(struct.pack('>i', 8))
+                buffer.write(struct.pack('>q', int_val))
+            else:
+                # For large or fractional decimals, we need proper numeric encoding
+                # PostgreSQL numeric binary format: ndigits(2), weight(2), sign(2), dscale(2), digits(2*ndigits)
+                # This is complex - for now, raise an error to fall back to text COPY
+                raise ValueError(f"Decimal value {value} requires text COPY format (binary numeric encoding not implemented)")
+            return
+
+        # Handle UUID
+        if isinstance(value, uuid.UUID):
+            # PostgreSQL UUID is 16 bytes
+            buffer.write(struct.pack('>i', 16))
+            buffer.write(value.bytes)
+            return
+
+        # Handle datetime/timestamp
+        if isinstance(value, datetime):
+            # PostgreSQL timestamp: microseconds since 2000-01-01
+            # Epoch for PostgreSQL is 2000-01-01 00:00:00 UTC
+            pg_epoch = datetime(2000, 1, 1)
+            if value.tzinfo is not None:
+                # Convert to UTC
+                import pytz
+                value = value.astimezone(pytz.UTC).replace(tzinfo=None)
+            delta = value - pg_epoch
+            microseconds = int(delta.total_seconds() * 1_000_000)
+            buffer.write(struct.pack('>i', 8))
+            buffer.write(struct.pack('>q', microseconds))
+            return
+
+        # Handle date
+        if isinstance(value, date):
+            # PostgreSQL date: days since 2000-01-01
+            pg_epoch = date(2000, 1, 1)
+            days = (value - pg_epoch).days
+            buffer.write(struct.pack('>i', 4))
+            buffer.write(struct.pack('>i', days))
+            return
+
+        # Handle dict/list (JSON/JSONB) - serialize to string
+        if isinstance(value, (dict, list)):
+            encoded = json.dumps(value).encode('utf-8')
+            buffer.write(struct.pack('>i', len(encoded)))
+            buffer.write(encoded)
+            return
+
+        # Handle numpy types
+        try:
+            import numpy as np
+            if isinstance(value, np.integer):
+                buffer.write(struct.pack('>i', 8))
+                buffer.write(struct.pack('>q', int(value)))
+                return
+            if isinstance(value, np.floating):
+                buffer.write(struct.pack('>i', 8))
+                buffer.write(struct.pack('>d', float(value)))
+                return
+            if isinstance(value, np.bool_):
+                buffer.write(struct.pack('>i', 1))
+                buffer.write(b'\x01' if value else b'\x00')
+                return
+        except ImportError:
+            pass
+
+        # Fallback: convert to string
+        logger.warning(f"Unknown type {type(value)} for value, converting to string")
+        encoded = str(value).encode('utf-8')
+        buffer.write(struct.pack('>i', len(encoded)))
+        buffer.write(encoded)
+
     def _import_using_insert(self, df: pd.DataFrame, table_name: str, columns: List[str], batch_size: int) -> int:
         """
         Fallback: Import using batch INSERT (slower than COPY).
@@ -656,18 +947,18 @@ class OptimizedDatabaseImporter:
                 column_list = ', '.join(columns)
                 placeholders = ', '.join(['%s'] * len(columns))
 
-                # Define conflict targets (unique constraints) for each table
+                # Define conflict targets based on primary keys from official Sourcify schema
                 conflict_targets = {
-                    'code': '(code_hash)',
-                    'sources': '(source_hash)',
-                    'contracts': '(creation_code_hash, runtime_code_hash)',
-                    'compiled_contracts': '(compiler, version, language, creation_code_hash, runtime_code_hash)',
-                    'compiled_contracts_sources': '(compilation_id, path)',
-                    'contract_deployments': '(chain_id, address, transaction_hash, contract_id)',
-                    'verified_contracts': '(compilation_id, deployment_id)',
-                    'sourcify_matches': '(verified_contract_id)',
-                    'signatures': '(signature_hash_32)',
-                    'compiled_contracts_signatures': '(compilation_id, signature_hash_32, signature_type)',
+                    'code': '(code_hash)',                    # PK: code_hash bytea
+                    'sources': '(source_hash)',              # PK: source_hash bytea
+                    'signatures': '(signature_hash_32)',     # PK: signature_hash_32 bytea
+                    'contracts': '(id)',                     # PK: id uuid
+                    'compiled_contracts': '(id)',            # PK: id uuid
+                    'compiled_contracts_sources': '(id)',    # PK: id uuid
+                    'compiled_contracts_signatures': '(id)', # PK: id uuid
+                    'contract_deployments': '(id)',          # PK: id uuid
+                    'verified_contracts': '(id)',            # PK: id bigint
+                    'sourcify_matches': '(id)',              # PK: id bigint
                 }
 
                 # Conflict handling
