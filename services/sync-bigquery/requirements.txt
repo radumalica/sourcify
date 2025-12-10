@@ -14,3 +14,4 @@ numpy==1.26.4
 # Utilities
 python-dotenv==1.0.0
 schedule==1.2.0
+requests==2.31.0

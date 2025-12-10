@@ -204,6 +204,39 @@ services:
     networks:
       - sourcify-network
 
+  # Parquet sync service - FASTEST (10-100x faster than BigQuery)
+  # Downloads pre-exported parquet files from Sourcify's public export
+  # Recommended for initial bulk loads and periodic full refreshes
+  sync-parquet:
+    build:
+      context: ./services/sync-bigquery
+      dockerfile: Dockerfile
+    command: ["python", "/app/sync_parquet.py"]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-sourcify}
+      POSTGRES_USER: ${POSTGRES_USER:-sourcify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcify}
+      POSTGRES_PORT: 5432
+      # Parquet sync settings
+      MANIFEST_URL: ${MANIFEST_URL:-https://export.sourcify.dev/manifest.json}
+      PARQUET_BASE_URL: ${PARQUET_BASE_URL:-https://export.sourcify.dev}
+      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/tmp/parquet}
+      USE_COPY: ${SYNC_USE_COPY:-true}
+      MANAGE_INDEXES: ${SYNC_MANAGE_INDEXES:-true}
+    volumes:
+      - ./services/sync-bigquery/logs:/app/logs
+      - /tmp/parquet:/tmp/parquet  # Temporary storage for downloaded files
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - sourcify-network
+    profiles:
+      - manual
+
 volumes:
   postgres_data:
 
