@@ -286,6 +286,15 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
     logger.info(f"DataFrame columns: {list(df.columns)}")
     logger.info(f"DataFrame dtypes: {dict(df.dtypes)}")
     
+    # Convert string[python] dtype to object for easier manipulation
+    # Also replace pd.NA with None
+    for col in df.columns:
+        if str(df[col].dtype).startswith('string'):
+            logger.info(f"Converting column '{col}' from string[python] to object dtype")
+            df[col] = df[col].astype('object')
+        # Replace pd.NA with None for all columns
+        df[col] = df[col].replace({pd.NA: None})
+    
     # Clean up ALL object and string columns to ensure valid UTF-8 encoding
     # BUT: Skip columns that contain bytea (binary) data
     # This is critical because parquet files from BigQuery may contain invalid UTF-8 in text columns
@@ -347,6 +356,31 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         
         df[col] = df[col].apply(ensure_valid_utf8)
         logger.info(f"Cleaned text column '{col}'")
+        
+        # Verify cleaning worked - check a sample
+        sample_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+        if sample_val:
+            try:
+                sample_val.encode('utf-8')
+                logger.debug(f"Column '{col}' UTF-8 validation passed")
+            except Exception as e:
+                logger.error(f"Column '{col}' still has invalid UTF-8 after cleaning: {e}")
+                raise ValueError(f"Failed to clean UTF-8 in column '{col}'")
+    
+    # Also ensure bytea columns are properly handled
+    for col in bytea_columns:
+        def ensure_bytes_or_none(x):
+            if pd.isna(x) or x is None:
+                return None
+            if isinstance(x, bytes):
+                return x
+            if isinstance(x, memoryview):
+                return bytes(x)
+            # Unexpected type in bytea column
+            logger.error(f"Unexpected type {type(x)} in bytea column {col}, converting to NULL")
+            return None
+        
+        df[col] = df[col].apply(ensure_bytes_or_none)
     
     # Import using optimized database importer
     importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=False)
