@@ -19,7 +19,7 @@ COPY . .
 RUN mkdir -p /app/logs
 
 # Make sync scripts executable
-RUN chmod +x sync_bigquery.py sync_bigquery_optimized.py
+RUN chmod +x  sync_bigquery_optimized.py sync_parquet.py
 
 # Default command (use optimized version for better performance)
-CMD ["python", "sync_bigquery.py"]
+CMD ["python", "sync_bigquery_optimized.py"]
