@@ -282,6 +282,10 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         logger.warning("Parquet file is empty, skipping import")
         return 0
     
+    # Log dataframe info
+    logger.info(f"DataFrame columns: {list(df.columns)}")
+    logger.info(f"DataFrame dtypes: {dict(df.dtypes)}")
+    
     # Clean up ALL object columns to ensure valid UTF-8 encoding
     # BUT: Skip columns that contain bytea (binary) data
     # This is critical because parquet files from BigQuery may contain invalid UTF-8 in text columns
@@ -297,43 +301,63 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                 bytes_count = sum(isinstance(x, bytes) or isinstance(x, memoryview) for x in samples)
                 if bytes_count > len(samples) / 2:  # If more than half are bytes, it's a bytea column
                     bytea_columns.add(col)
-                    logger.debug(f"Column {col} identified as bytea (binary), skipping UTF-8 cleaning")
+                    logger.info(f"Column '{col}' identified as bytea (binary), skipping UTF-8 cleaning")
     
-    # Clean only non-bytea object columns
+    # Clean ALL object columns, but handle bytea differently
     for col in df.columns:
-        if df[col].dtype == 'object' and col not in bytea_columns:
-            def ensure_valid_utf8(x):
-                if pd.isna(x) or x is None:
+        if df[col].dtype == 'object':
+            if col in bytea_columns:
+                # For bytea columns, just ensure they're all bytes or None
+                def ensure_bytes_or_none(x):
+                    if pd.isna(x) or x is None:
+                        return None
+                    if isinstance(x, bytes):
+                        return x
+                    if isinstance(x, memoryview):
+                        return bytes(x)
+                    # Unexpected type in bytea column
+                    logger.error(f"Unexpected type {type(x)} in bytea column {col}, converting to NULL")
                     return None
-                if isinstance(x, bytes):
-                    # Bytes in a string column - decode with error handling
-                    try:
-                        return x.decode('utf-8', errors='replace')
-                    except:
-                        logger.warning(f"Cannot decode bytes in text column {col}, converting to NULL")
+                
+                df[col] = df[col].apply(ensure_bytes_or_none)
+            else:
+                # For text columns, ensure valid UTF-8
+                def ensure_valid_utf8(x):
+                    if pd.isna(x) or x is None:
                         return None
-                if not isinstance(x, str):
-                    # Convert to string
+                    if isinstance(x, bytes):
+                        # Bytes in a string column - decode with error handling
+                        try:
+                            decoded = x.decode('utf-8', errors='replace')
+                            if decoded != x.decode('utf-8', errors='ignore'):
+                                logger.warning(f"Replaced invalid UTF-8 bytes in column '{col}'")
+                            return decoded
+                        except Exception as e:
+                            logger.error(f"Cannot decode bytes in text column '{col}': {e}, converting to NULL")
+                            return None
+                    if not isinstance(x, str):
+                        # Convert to string
+                        try:
+                            return str(x)
+                        except Exception as e:
+                            logger.error(f"Cannot convert value to string in column '{col}': {e}")
+                            return None
+                    # Validate and clean UTF-8 for strings
                     try:
-                        x = str(x)
-                    except:
-                        logger.warning(f"Cannot convert value to string in column {col}")
-                        return None
-                # Validate and clean UTF-8 for strings
-                try:
-                    x.encode('utf-8')
-                    return x
-                except:
-                    try:
-                        # Replace invalid UTF-8 sequences
-                        cleaned = x.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
-                        logger.warning(f"Cleaned invalid UTF-8 in column {col}")
-                        return cleaned
-                    except:
-                        logger.warning(f"Cannot clean string in column {col}, converting to NULL")
-                        return None
-            
-            df[col] = df[col].apply(ensure_valid_utf8)
+                        x.encode('utf-8')
+                        return x
+                    except (UnicodeEncodeError, UnicodeDecodeError) as e:
+                        try:
+                            # Replace invalid UTF-8 sequences
+                            cleaned = x.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                            logger.warning(f"Replaced invalid UTF-8 in column '{col}': {e}")
+                            return cleaned
+                        except Exception as e2:
+                            logger.error(f"Cannot clean string in column '{col}': {e2}, converting to NULL")
+                            return None
+                
+                df[col] = df[col].apply(ensure_valid_utf8)
+                logger.info(f"Cleaned text column '{col}'")
     
     # Import using optimized database importer
     importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=False)
