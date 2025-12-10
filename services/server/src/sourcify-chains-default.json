@@ -4,45 +4,15 @@
     "supported": true,
     "etherscanApi": {
       "supported": true,
-      "apiKeyEnvName": "ETHERSCAN_API_KEY_MAINNET"
+      "apiKeyEnvName": "ETHERSCAN_API_KEY"
     },
     "fetchContractCreationTxUsing": {
       "blockscoutApi": {
         "url": "https://eth.blockscout.com/"
-      },
-      "routescanApi": {
-        "type": "mainnet"
-      },
-      "avalancheApi": true,
-      "etherscanApi": true
+      }
     },
     "rpc": [
-      {
-        "type": "FetchRequest",
-        "url": "https://rpc.mainnet.ethpandaops.io",
-        "headers": [
-          {
-            "headerName": "CF-Access-Client-Id",
-            "headerEnvName": "CF_ACCESS_CLIENT_ID"
-          },
-          {
-            "headerName": "CF-Access-Client-Secret",
-            "headerEnvName": "CF_ACCESS_CLIENT_SECRET"
-          }
-        ]
-      },
-      {
-        "type": "APIKeyRPC",
-        "url": "https://eth-mainnet.g.alchemy.com/v2/{API_KEY}",
-        "apiKeyEnvName": "ALCHEMY_API_KEY"
-      },
-      {
-        "type": "APIKeyRPC",
-        "url": "https://{SUBDOMAIN}.quiknode.pro/{API_KEY}",
-        "apiKeyEnvName": "QUICKNODE_API_KEY",
-        "subDomainEnvName": "QUICKNODE_SUBDOMAIN",
-        "traceSupport": "trace_transaction"
-      }
+      "http://10.240.0.189:8001"
     ]
   },
   "16969696": {
