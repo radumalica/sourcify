@@ -79,6 +79,11 @@ services:
       DRPC_API_KEY: ${DRPC_API_KEY:-}
       ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
       ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY:-}
+      SESSION_SECRET: ${SESSION_SECRET:-sourcify_secret}
+      NODE_CONFIG_ENV: ${NODE_CONFIG_ENV:-default}
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}
+      SOURCIFY_VERIFY_UIL: ${SOURCIFY_VERIFY_UI:-https://verify.evmrepo.masternode.ro}
+      SOURCIFY_REPO_UI: ${SOURCIFY_REPO_UI:-https://repo.evmrepo.masternode.ro}
     volumes:
       - ./services/server/src/sourcify-chains-default.json:/home/app/services/server/dist/sourcify-chains.json:ro
       - ./services/server/src/config:/home/app/services/server/dist/config:ro
