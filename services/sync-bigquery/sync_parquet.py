@@ -207,6 +207,39 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         logger.warning("Parquet file is empty, skipping import")
         return 0
     
+    # Clean up string columns to ensure valid UTF-8 encoding
+    # This is critical because parquet files from BigQuery may contain invalid UTF-8
+    logger.info(f"Validating UTF-8 encoding in string columns...")
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Check if column contains strings (not bytes or other objects)
+            sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+            if isinstance(sample, str):
+                def ensure_valid_utf8(x):
+                    if pd.isna(x) or x is None:
+                        return None
+                    if isinstance(x, bytes):
+                        # Bytes in a string column - decode with error handling
+                        try:
+                            return x.decode('utf-8', errors='replace')
+                        except:
+                            logger.warning(f"Cannot decode bytes in column {col}")
+                            return None
+                    if not isinstance(x, str):
+                        return str(x)
+                    # Validate and clean UTF-8
+                    try:
+                        x.encode('utf-8')
+                        return x
+                    except:
+                        try:
+                            return x.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                        except:
+                            logger.warning(f"Cannot clean string in column {col}")
+                            return None
+                
+                df[col] = df[col].apply(ensure_valid_utf8)
+    
     # Import using optimized database importer
     importer = OptimizedDatabaseImporter(conn, use_copy=use_copy, manage_indexes=False)
     rows_imported = importer.import_dataframe(df, table_name, batch_size=100000)

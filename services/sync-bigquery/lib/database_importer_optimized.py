@@ -532,9 +532,19 @@ class OptimizedDatabaseImporter:
                     if isinstance(sample, bytes):
                         # Convert bytes to hex string with \x prefix for PostgreSQL COPY format
                         # In COPY text format, \x followed by hex digits is interpreted as bytea
-                        df_copy[col] = df_copy[col].apply(
-                            lambda x: '\\x' + x.hex() if isinstance(x, bytes) else (None if pd.isna(x) else x)
-                        )
+                        # Handle mixed types: ensure all values are either bytes or None
+                        def convert_to_hex_or_none(x):
+                            if pd.isna(x):
+                                return None
+                            if isinstance(x, bytes):
+                                return '\\x' + x.hex()
+                            if isinstance(x, memoryview):
+                                return '\\x' + bytes(x).hex()
+                            # If not bytes/memoryview, log warning and convert to None
+                            logger.warning(f"Unexpected type {type(x)} in bytea column {col}, converting to NULL")
+                            return None
+                        
+                        df_copy[col] = df_copy[col].apply(convert_to_hex_or_none)
                         bytea_columns.add(col)  # Mark as bytea to skip escaping
                     elif isinstance(sample, (dict, list)):
                         # Convert dict/list to JSON string for both JSON and JSONB columns
@@ -544,8 +554,35 @@ class OptimizedDatabaseImporter:
                         )
                     elif isinstance(sample, str):
                         # Strings are used for: text, varchar, json/jsonb (already serialized), enums
-                        # No special handling needed for COPY - pass through as-is
-                        pass
+                        # Ensure all strings are valid UTF-8 by cleaning invalid byte sequences
+                        def clean_utf8_string(x):
+                            if pd.isna(x):
+                                return None
+                            # Handle bytes that might be in a string column
+                            if isinstance(x, bytes):
+                                try:
+                                    return x.decode('utf-8', errors='replace')
+                                except:
+                                    logger.warning(f"Cannot decode bytes in string column {col}, converting to hex representation")
+                                    return '\\x' + x.hex()
+                            if not isinstance(x, str):
+                                # Convert to string
+                                return str(x)
+                            # Ensure string is valid UTF-8
+                            try:
+                                # Try to encode to UTF-8 to detect issues
+                                x.encode('utf-8')
+                                return x
+                            except (UnicodeEncodeError, UnicodeDecodeError):
+                                # String contains invalid UTF-8 characters
+                                # Re-encode with error handling to replace/ignore bad chars
+                                try:
+                                    return x.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                                except:
+                                    logger.warning(f"Cannot clean string in column {col}, setting to NULL")
+                                    return None
+                        
+                        df_copy[col] = df_copy[col].apply(clean_utf8_string)
                 elif df_copy[col].dtype == 'bool':
                     # Convert Python bool to PostgreSQL format: true/false (lowercase)
                     df_copy[col] = df_copy[col].apply(
@@ -560,6 +597,12 @@ class OptimizedDatabaseImporter:
                     def escape_for_copy(x):
                         if not isinstance(x, str):
                             return x
+                        # Ensure the string is valid UTF-8 before escaping
+                        try:
+                            x.encode('utf-8')
+                        except (UnicodeEncodeError, UnicodeDecodeError):
+                            logger.warning(f"Invalid UTF-8 in column {col} during escape, cleaning...")
+                            x = x.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
                         # Escape special characters for COPY format
                         # Note: bytea columns are already excluded via bytea_columns set
                         return x.replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
@@ -569,16 +612,29 @@ class OptimizedDatabaseImporter:
             # Prepare CSV buffer for PostgreSQL COPY
             # Use QUOTE_NONE to prevent quoting (critical for bytea NULL handling)
             buffer = StringIO()
-            df_copy.to_csv(
-                buffer,
-                index=False,
-                header=False,
-                sep='\t',
-                na_rep='\\N',  # PostgreSQL NULL representation
-                quoting=csv.QUOTE_NONE,  # Don't quote any values
-                escapechar=None,  # We manually escaped above
-                lineterminator='\n'  # Use Unix line endings
-            )
+            try:
+                df_copy.to_csv(
+                    buffer,
+                    index=False,
+                    header=False,
+                    sep='\t',
+                    na_rep='\\N',  # PostgreSQL NULL representation
+                    quoting=csv.QUOTE_NONE,  # Don't quote any values
+                    escapechar=None,  # We manually escaped above
+                    lineterminator='\n'  # Use Unix line endings
+                )
+            except Exception as e:
+                logger.error(f"Error writing DataFrame to CSV buffer: {e}")
+                # Try to identify problematic rows/columns
+                for idx, row in df_copy.iterrows():
+                    for col in columns:
+                        val = row[col]
+                        if val is not None and not pd.isna(val):
+                            try:
+                                str(val).encode('utf-8')
+                            except:
+                                logger.error(f"Problematic value in row {idx}, column {col}: {type(val)}")
+                raise
             buffer.seek(0)
 
             # COPY data into temporary table
