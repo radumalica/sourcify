@@ -532,14 +532,16 @@ class OptimizedDatabaseImporter:
                     if isinstance(sample, bytes) or isinstance(sample, memoryview):
                         # Convert bytes to hex string with \x prefix for PostgreSQL COPY format
                         # In COPY text format, \x followed by hex digits is interpreted as bytea
+                        # We need to escape the backslash for CSV/COPY: \\x instead of \x
                         # Handle mixed types: ensure all values are either bytes or None
                         def convert_to_hex_or_none(x):
                             if pd.isna(x) or x is None:
                                 return None
                             if isinstance(x, bytes):
-                                return '\\x' + x.hex()
+                                # Use double backslash - one will be consumed by COPY parser
+                                return '\\\\x' + x.hex()
                             if isinstance(x, memoryview):
-                                return '\\x' + bytes(x).hex()
+                                return '\\\\x' + bytes(x).hex()
                             # If not bytes/memoryview, log warning and convert to None
                             logger.warning(f"Unexpected type {type(x)} in bytea column {col}, converting to NULL")
                             return None
