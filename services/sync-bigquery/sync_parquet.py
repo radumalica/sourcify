@@ -157,12 +157,18 @@ class ParquetSyncTracker:
             cursor.close()
     
     def get_table_row_count(self, table_name: str) -> int:
-        """Get the number of rows in a table"""
+        """Get the approximate number of rows in a table (fast estimate)"""
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            # Use PostgreSQL's statistics for a fast estimate instead of COUNT(*)
+            # This is much faster for large tables
+            cursor.execute("""
+                SELECT reltuples::bigint 
+                FROM pg_class 
+                WHERE relname = %s
+            """, (table_name,))
             result = cursor.fetchone()
-            return result[0] if result else 0
+            return result[0] if result and result[0] else 0
         finally:
             cursor.close()
     
