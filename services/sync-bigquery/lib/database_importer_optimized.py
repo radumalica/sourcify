@@ -255,7 +255,22 @@ class OptimizedDatabaseImporter:
         cursor = self.conn.cursor()
 
         try:
+            # First, check which indexes actually exist
+            cursor.execute("""
+                SELECT indexname
+                FROM pg_indexes
+                WHERE tablename = %s
+                AND schemaname = 'public'
+            """, (table_name,))
+            
+            existing_indexes = {row[0] for row in cursor.fetchall()}
+            
             for idx in indexes:
+                # Skip if index already exists
+                if idx['name'] in existing_indexes:
+                    logger.info(f"Index {idx['name']} already exists, skipping recreation")
+                    continue
+                
                 logger.info(f"Recreating index {idx['name']}...")
                 start_time = time.time()
 
@@ -265,7 +280,7 @@ class OptimizedDatabaseImporter:
                 logger.info(f"Index {idx['name']} recreated in {elapsed:.2f}s")
 
             self.conn.commit()
-            logger.info(f"Recreated {len(indexes)} indexes for {table_name}")
+            logger.info(f"Recreated indexes for {table_name}")
 
         except Exception as e:
             self.conn.rollback()
