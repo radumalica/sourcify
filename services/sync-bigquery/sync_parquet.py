@@ -283,19 +283,34 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         return 0
     
     # Clean up ALL object columns to ensure valid UTF-8 encoding
-    # This is critical because parquet files from BigQuery may contain invalid UTF-8
-    logger.info(f"Validating UTF-8 encoding in all object columns...")
+    # BUT: Skip columns that contain bytea (binary) data
+    # This is critical because parquet files from BigQuery may contain invalid UTF-8 in text columns
+    logger.info(f"Validating UTF-8 encoding in text columns...")
+    
+    # Identify bytea columns by checking if they contain bytes
+    bytea_columns = set()
     for col in df.columns:
         if df[col].dtype == 'object':
+            # Check first few non-null values to determine if column is bytea
+            samples = df[col].dropna().head(10)
+            if len(samples) > 0:
+                bytes_count = sum(isinstance(x, bytes) or isinstance(x, memoryview) for x in samples)
+                if bytes_count > len(samples) / 2:  # If more than half are bytes, it's a bytea column
+                    bytea_columns.add(col)
+                    logger.debug(f"Column {col} identified as bytea (binary), skipping UTF-8 cleaning")
+    
+    # Clean only non-bytea object columns
+    for col in df.columns:
+        if df[col].dtype == 'object' and col not in bytea_columns:
             def ensure_valid_utf8(x):
                 if pd.isna(x) or x is None:
                     return None
                 if isinstance(x, bytes):
-                    # Bytes - decode with error handling
+                    # Bytes in a string column - decode with error handling
                     try:
                         return x.decode('utf-8', errors='replace')
                     except:
-                        logger.warning(f"Cannot decode bytes in column {col}, converting to NULL")
+                        logger.warning(f"Cannot decode bytes in text column {col}, converting to NULL")
                         return None
                 if not isinstance(x, str):
                     # Convert to string
