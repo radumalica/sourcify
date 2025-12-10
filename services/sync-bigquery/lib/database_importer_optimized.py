@@ -689,12 +689,19 @@ class OptimizedDatabaseImporter:
             logger.debug(f"Inserting from temporary table into {table_name}...")
             start_time = time.time()
 
+            # Disable FK constraint triggers for faster bulk insert
+            # This is safe because we import in dependency order (parent tables first)
+            cursor.execute(f"ALTER TABLE {table_name} DISABLE TRIGGER ALL")
+
             cursor.execute(f"""
                 INSERT INTO {table_name} ({column_list})
                 SELECT {column_list}
                 FROM {temp_table}
                 {conflict_clause}
             """)
+
+            # Re-enable FK constraint triggers
+            cursor.execute(f"ALTER TABLE {table_name} ENABLE TRIGGER ALL")
 
             rows_imported = cursor.rowcount
             insert_time = time.time() - start_time
@@ -823,12 +830,19 @@ class OptimizedDatabaseImporter:
             logger.debug(f"Inserting from temporary table into {table_name}...")
             start_time = time.time()
 
+            # Disable FK constraint triggers for faster bulk insert
+            # This is safe because we import in dependency order (parent tables first)
+            cursor.execute(f"ALTER TABLE {table_name} DISABLE TRIGGER ALL")
+
             cursor.execute(f"""
                 INSERT INTO {table_name} ({column_list})
                 SELECT {column_list}
                 FROM {temp_table}
                 {conflict_clause}
             """)
+
+            # Re-enable FK constraint triggers
+            cursor.execute(f"ALTER TABLE {table_name} ENABLE TRIGGER ALL")
 
             rows_imported = cursor.rowcount
             insert_time = time.time() - start_time
