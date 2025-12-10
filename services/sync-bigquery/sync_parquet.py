@@ -12,7 +12,7 @@ import logging
 import psycopg2
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 import pandas as pd
@@ -118,7 +118,13 @@ class ParquetSyncTracker:
             status, db_timestamp = result
             
             # Convert manifest timestamp (milliseconds) to datetime
-            manifest_dt = datetime.fromtimestamp(manifest_timestamp / 1000.0)
+            # Use UTC timezone to match PostgreSQL timestamp behavior
+            manifest_dt = datetime.fromtimestamp(manifest_timestamp / 1000.0, tz=timezone.utc)
+            
+            # Ensure db_timestamp is timezone-aware for comparison
+            # If it's naive, assume it's UTC
+            if db_timestamp.tzinfo is None:
+                db_timestamp = db_timestamp.replace(tzinfo=timezone.utc)
             
             # File is imported if status is completed and timestamp matches or is newer
             return status == 'completed' and db_timestamp >= manifest_dt
