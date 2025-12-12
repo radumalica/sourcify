@@ -284,6 +284,9 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
     for i, field in enumerate(parquet_table.schema):
         if pa.types.is_boolean(field.type):
             boolean_columns.append(field.name)
+            # Log NULL count for each boolean column
+            pa_col = parquet_table.column(field.name)
+            logger.info(f"Boolean column '{field.name}': {pa_col.null_count} NULLs out of {len(pa_col)} values")
 
     if boolean_columns:
         logger.info(f"Identified boolean columns that require NULL preservation: {boolean_columns}")
