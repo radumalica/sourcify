@@ -159,27 +159,26 @@ services:
 
 
   # Monitor service
-  monitor:
-    build:
-      context: .
-      dockerfile: services/monitor/Dockerfile
-    environment:
-      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
-      INFURA_API_KEY: ${INFURA_API_KEY:-}
-      DRPC_API_KEY: ${DRPC_API_KEY:-}
-      ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
-      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
-      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
-      NODE_ENV: ${NODE_ENV:-development}
-      NODE_LOG_LEVEL: ${NODE_LOG_LEVEL:-info}
-    volumes:
-      - ./services/monitor/monitorChains.json:/home/app/services/monitor/monitorChains.json:ro
-    depends_on:
-      server:
-        condition: service_started
-    networks:
-      - sourcify-network
-
+  #monitor:
+  #  build:
+  #    context: .
+  #    dockerfile: services/monitor/Dockerfile
+  #  environment:
+  #    ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
+  #    INFURA_API_KEY: ${INFURA_API_KEY:-}
+  #    DRPC_API_KEY: ${DRPC_API_KEY:-}
+  #    ZIRCUIT_API_KEY: ${ZIRCUIT_API_KEY:-}
+  #    CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+  #    CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
+  #    NODE_ENV: ${NODE_ENV:-development}
+  #    NODE_LOG_LEVEL: ${NODE_LOG_LEVEL:-info}
+  #  volumes:
+  #    - ./services/monitor/monitorChains.json:/home/app/services/monitor/monitorChains.json:ro
+  #  depends_on:
+  #    server:
+  #      condition: service_started
+  #  networks:
+  #    - sourcify-network
   # BigQuery sync service - OPTIMIZED (10-50x faster)
   # Uses COPY instead of INSERT, index management, parallel processing
   # Recommended for bulk imports of 1M+ rows
@@ -236,10 +235,8 @@ services:
       SYNC_SCHEDULE: ${SYNC_SCHEDULE:-0 2 * * *}
       RUN_ON_STARTUP: ${RUN_ON_STARTUP:-false}
       GCP_PROJECT_ID: ${GCP_PROJECT_ID:-n8n-self-468309}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/gcp-key.json}
     volumes:
       - ./services/sync-bigquery/logs:/app/logs
-      - ${GCP_KEY_PATH:-./services/sync-bigquery/gcp-key.json}:/app/gcp-key.json:ro
     depends_on:
       db:
         condition: service_healthy
