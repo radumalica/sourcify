@@ -273,32 +273,63 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         Number of rows imported
     """
     logger.info(f"Reading parquet file: {file_path}")
-    
-    # Read parquet file
-    df = pd.read_parquet(file_path)
+
+    # Read parquet file using pyarrow for better control over nullable types
+    # The default pandas bool dtype cannot represent NULL and converts NULL to False
+    parquet_table = pq.read_table(file_path)
+
+    # Identify boolean columns that need special handling
+    boolean_columns = []
+    for i, field in enumerate(parquet_table.schema):
+        if pq.types.is_boolean(field.type):
+            boolean_columns.append(field.name)
+
+    if boolean_columns:
+        logger.info(f"Identified boolean columns that require NULL preservation: {boolean_columns}")
+
+    # Convert to pandas DataFrame with standard dtypes (to preserve existing bytea handling)
+    # Boolean columns will be converted to object dtype manually to preserve NULLs
+    df = parquet_table.to_pandas()
+
     rows_count = len(df)
-    
+
     logger.info(f"Parquet file contains {rows_count:,} rows")
-    
+
     if rows_count == 0:
         logger.warning("Parquet file is empty, skipping import")
         return 0
-    
+
     # Log dataframe info
     logger.info(f"DataFrame columns: {list(df.columns)}")
     logger.info(f"DataFrame dtypes: {dict(df.dtypes)}")
-    
-    # Convert string[python] dtype to object for easier manipulation
-    # Also replace pd.NA with None
-    # IMPORTANT: Convert bool dtype to nullable boolean to preserve NULL values
+
+    # Convert dtypes for compatibility and NULL preservation
     for col in df.columns:
-        if str(df[col].dtype).startswith('string'):
-            logger.info(f"Converting column '{col}' from string[python] to object dtype")
+        dtype_str = str(df[col].dtype)
+
+        # Convert string[python] to object
+        if dtype_str.startswith('string'):
+            logger.info(f"Converting column '{col}' from {dtype_str} to object dtype")
             df[col] = df[col].astype('object')
-        elif df[col].dtype == 'bool':
-            # Convert to object to preserve NULL values (bool dtype converts NULL to False)
+
+        # Convert bool to object to preserve NULL values
+        # IMPORTANT: This must be done BEFORE any data processing
+        elif df[col].dtype == 'bool' or col in boolean_columns:
+            # For boolean columns, check if there are any NaN/NA values in the pyarrow table
+            # If yes, we need to convert to object dtype to preserve them
             logger.info(f"Converting column '{col}' from bool to object dtype to preserve NULL values")
-            df[col] = df[col].astype('object')
+            # Get the original pyarrow column to check for nulls
+            pa_col = parquet_table.column(col)
+            if pa_col.null_count > 0:
+                logger.info(f"  Column '{col}' has {pa_col.null_count} NULL values that will be preserved")
+                # Convert using pyarrow data to preserve NULLs
+                df[col] = pa_col.to_pandas(deduplicate_objects=False)
+                # Now convert to object dtype
+                df[col] = df[col].astype('object')
+            else:
+                # No NULLs, safe to use standard conversion
+                df[col] = df[col].astype('object')
+
         # Replace pd.NA with None for all columns
         df[col] = df[col].replace({pd.NA: None})
     
