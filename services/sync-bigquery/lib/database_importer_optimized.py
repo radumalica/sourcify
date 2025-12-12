@@ -651,7 +651,11 @@ class OptimizedDatabaseImporter:
             )
 
             copy_time = time.time() - start_time
-            logger.debug(f"COPY completed in {copy_time:.2f}s ({len(df)/copy_time:.0f} rows/sec)")
+            
+            # Count rows in temp table to know how many made it through COPY
+            cursor.execute(f"SELECT COUNT(*) FROM {temp_table}")
+            rows_in_temp = cursor.fetchone()[0]
+            logger.debug(f"COPY completed in {copy_time:.2f}s ({len(df)/copy_time:.0f} rows/sec) - {rows_in_temp:,} rows in temp table")
 
             # Insert from temp table to actual table with conflict handling
             column_list = ', '.join(columns)
@@ -693,17 +697,21 @@ class OptimizedDatabaseImporter:
             # This is safe because we import in dependency order (parent tables first)
             cursor.execute(f"ALTER TABLE {table_name} DISABLE TRIGGER ALL")
 
+            # Use RETURNING to count actual rows inserted
             cursor.execute(f"""
                 INSERT INTO {table_name} ({column_list})
                 SELECT {column_list}
                 FROM {temp_table}
                 {conflict_clause}
+                RETURNING 1
             """)
+
+            # Count the returned rows
+            rows_imported = len(cursor.fetchall())
 
             # Re-enable FK constraint triggers
             cursor.execute(f"ALTER TABLE {table_name} ENABLE TRIGGER ALL")
 
-            rows_imported = cursor.rowcount
             insert_time = time.time() - start_time
 
             self.conn.commit()
