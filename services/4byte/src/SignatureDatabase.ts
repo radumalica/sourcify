@@ -104,21 +104,28 @@ export class SignatureDatabase {
       .replace(/\?/g, "_");
 
     const query = `
-      SELECT DISTINCT
-        s.signature,
-        concat('0x', encode(s.signature_hash_4, 'hex')) AS signature_hash_4,
-        concat('0x', encode(s.signature_hash_32, 'hex')) AS signature_hash_32,
+      WITH limited_sigs AS (
+        SELECT DISTINCT
+          signature,
+          signature_hash_4,
+          signature_hash_32
+        FROM ${this.qualify("signatures")}
+        WHERE signature LIKE $1 ESCAPE '\\'
+        LIMIT $2
+      )
+      SELECT 
+        ls.signature,
+        concat('0x', encode(ls.signature_hash_4, 'hex')) AS signature_hash_4,
+        concat('0x', encode(ls.signature_hash_32, 'hex')) AS signature_hash_32,
         CASE
           WHEN EXISTS (
             SELECT 1
             FROM ${this.qualify("compiled_contracts_signatures")} ccs
-            WHERE ccs.signature_hash_32 = s.signature_hash_32
+            WHERE ccs.signature_hash_32 = ls.signature_hash_32
           ) THEN true
           ELSE false
         END as has_verified_contract
-      FROM ${this.qualify("signatures")} s
-      WHERE s.signature LIKE $1 ESCAPE '\\'
-      LIMIT $2
+      FROM limited_sigs ls
     `;
 
     const result = await this.pool.query<SignatureSearchRow>(query, [
