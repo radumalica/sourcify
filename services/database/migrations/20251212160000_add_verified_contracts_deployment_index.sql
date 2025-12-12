@@ -5,7 +5,8 @@
 -- to verified_contracts via deployment_id
 -- Without this index, queries scan the entire verified_contracts_pseudo_pkey index
 -- which is defined as (compilation_id, deployment_id) and inefficient for deployment_id lookups
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_verified_contracts_deployment_id
+-- Note: Using regular CREATE INDEX (not CONCURRENTLY) as this runs inside a migration transaction
+CREATE INDEX IF NOT EXISTS idx_verified_contracts_deployment_id
 ON verified_contracts(deployment_id);
 
 -- migrate:down

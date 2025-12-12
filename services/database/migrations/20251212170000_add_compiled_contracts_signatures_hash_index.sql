@@ -3,7 +3,8 @@
 -- Add index on compiled_contracts_signatures(signature_hash_32) for efficient lookups
 -- This is critical for signature search queries that check if a signature has verified contracts
 -- Without this index, the EXISTS subquery in searchSignaturesByPattern does a table scan
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_compiled_contracts_signatures_hash_32
+-- Note: Using regular CREATE INDEX (not CONCURRENTLY) as this runs inside a migration transaction
+CREATE INDEX IF NOT EXISTS idx_compiled_contracts_signatures_hash_32
 ON compiled_contracts_signatures(signature_hash_32);
 
 -- migrate:down
