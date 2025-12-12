@@ -842,17 +842,21 @@ class OptimizedDatabaseImporter:
             # This is safe because we import in dependency order (parent tables first)
             cursor.execute(f"ALTER TABLE {table_name} DISABLE TRIGGER ALL")
 
+            # Use RETURNING to count actual rows inserted
             cursor.execute(f"""
                 INSERT INTO {table_name} ({column_list})
                 SELECT {column_list}
                 FROM {temp_table}
                 {conflict_clause}
+                RETURNING 1
             """)
+
+            # Count the returned rows
+            rows_imported = len(cursor.fetchall())
 
             # Re-enable FK constraint triggers
             cursor.execute(f"ALTER TABLE {table_name} ENABLE TRIGGER ALL")
 
-            rows_imported = cursor.rowcount
             insert_time = time.time() - start_time
 
             self.conn.commit()
