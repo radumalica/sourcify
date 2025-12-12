@@ -11,9 +11,8 @@ services:
             rm -rf /var/lib/apt/lists/*
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Optional: Mount optimized config for bulk loading
-      # Uncomment the line below when running bulk import
-      # - ./services/sync-bigquery/postgres-bulk-load.conf:/etc/postgresql/postgresql.conf:ro
+      # Optimized config for production use with 8 CPU / 16GB RAM
+      - ./postgres-bulk-load.conf:/etc/postgresql/postgresql.conf:ro
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sourcify}
       POSTGRES_USER: ${POSTGRES_USER:-sourcify}
@@ -28,13 +27,11 @@ services:
     command:
       - "postgres"
       - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
       - "shared_preload_libraries=pg_cron"
       - "-c"
       - "cron.database_name=${POSTGRES_DB:-sourcify}"
-      # Bulk loading optimizations (set via env vars or config file)
-      # Uncomment when running bulk import
-      # - "-c"
-      # - "config_file=/etc/postgresql/postgresql.conf"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sourcify}"]
       interval: 10s
@@ -43,7 +40,8 @@ services:
     networks:
       - sourcify-network
     # Increase shared memory for PostgreSQL (important for large shared_buffers)
-    shm_size: 2gb
+    # Increased to 4GB to match optimized config (shared_buffers=4GB)
+    shm_size: 4gb
 
   # Database migrations
   migrations:

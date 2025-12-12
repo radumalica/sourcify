@@ -12,6 +12,7 @@ services:
             rm -rf /var/lib/apt/lists/*
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres-bulk-load.conf:/etc/postgresql/postgresql.conf:ro
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -21,6 +22,8 @@ services:
     command:
       [
         "postgres",
+        "-c",
+        "config_file=/etc/postgresql/postgresql.conf",
         "-c",
         "shared_preload_libraries=pg_cron",
         "-c",
