@@ -350,25 +350,35 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                 logger.info(f"Column '{col}' after conversion: type={type(sample_after)}, len={len(sample_after) if sample_after else 0}")
 
     # Clean up ALL object and string columns to ensure valid UTF-8 encoding
-    # BUT: Skip columns that contain bytea (binary) data
+    # BUT: Skip columns that contain bytea (binary) data OR boolean data
     # This is critical because parquet files from BigQuery may contain invalid UTF-8 in text columns
     logger.info(f"Validating UTF-8 encoding in text columns...")
-    
-    # Identify bytea columns by checking if they contain bytes
+
+    # Identify bytea and boolean columns by checking their content
     bytea_columns = set()
+    boolean_columns = set()
     text_columns = []
-    
+
     for col in df.columns:
         # Check both object and string dtypes
         if df[col].dtype == 'object' or str(df[col].dtype).startswith('string'):
-            # Check first few non-null values to determine if column is bytea
+            # Check first few non-null values to determine column type
             samples = df[col].dropna().head(10)
             if len(samples) > 0 and df[col].dtype == 'object':
+                # Check for bytea columns
                 bytes_count = sum(isinstance(x, bytes) or isinstance(x, memoryview) for x in samples)
                 if bytes_count > len(samples) / 2:  # If more than half are bytes, it's a bytea column
                     bytea_columns.add(col)
                     logger.info(f"Column '{col}' identified as bytea (binary), skipping UTF-8 cleaning")
                     continue
+
+                # Check for boolean columns (converted from bool to object to preserve NULL)
+                bool_count = sum(isinstance(x, bool) for x in samples)
+                if bool_count > len(samples) / 2:  # If more than half are booleans, it's a boolean column
+                    boolean_columns.add(col)
+                    logger.info(f"Column '{col}' identified as boolean, skipping UTF-8 cleaning")
+                    continue
+
             text_columns.append(col)
     
     # Clean ALL text columns (object and string dtypes, but not bytea)
