@@ -500,6 +500,9 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                     if pd.isna(x) or x is None:
                         return None
                     if isinstance(x, str):
+                        # Check if it's the string "null" which should be actual NULL
+                        if x == 'null':
+                            return None
                         # Already a string - keep as-is
                         return x
                     if isinstance(x, (dict, list)):
