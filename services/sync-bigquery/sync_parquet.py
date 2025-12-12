@@ -290,9 +290,14 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
     
     # Convert string[python] dtype to object for easier manipulation
     # Also replace pd.NA with None
+    # IMPORTANT: Convert bool dtype to nullable boolean to preserve NULL values
     for col in df.columns:
         if str(df[col].dtype).startswith('string'):
             logger.info(f"Converting column '{col}' from string[python] to object dtype")
+            df[col] = df[col].astype('object')
+        elif df[col].dtype == 'bool':
+            # Convert to object to preserve NULL values (bool dtype converts NULL to False)
+            logger.info(f"Converting column '{col}' from bool to object dtype to preserve NULL values")
             df[col] = df[col].astype('object')
         # Replace pd.NA with None for all columns
         df[col] = df[col].replace({pd.NA: None})
