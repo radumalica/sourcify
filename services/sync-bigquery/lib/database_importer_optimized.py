@@ -859,13 +859,28 @@ class OptimizedDatabaseImporter:
 
         except Exception as e:
             self.conn.rollback()
-            logger.warning(f"Binary COPY failed: {e}. Falling back to text COPY...")
-            # Fall back to text COPY
+            logger.warning(f"Binary COPY failed: {e}. Falling back to chunked text COPY...")
+            # Fall back to text COPY in smaller chunks to avoid building huge buffers
             try:
                 cursor.close()
             except:
                 pass
-            return self._import_using_copy(df, table_name, columns)
+
+            try:
+                total_imported = 0
+                # Reasonable chunk size to limit memory usage; tuneable
+                chunk_size = 100000
+                logger.info(f"Attempting chunked text COPY fallback with chunk size {chunk_size} rows")
+                for start in range(0, len(df), chunk_size):
+                    end = start + chunk_size
+                    chunk = df.iloc[start:end]
+                    logger.info(f"Text COPY fallback: importing rows {start}..{min(end, len(df))} ({len(chunk):,} rows)")
+                    imported = self._import_using_copy(chunk, table_name, columns)
+                    total_imported += imported
+                return total_imported
+            except Exception as e2:
+                logger.error(f"Text COPY fallback (chunked) failed: {e2}", exc_info=True)
+                raise
         finally:
             try:
                 cursor.close()
