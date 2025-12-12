@@ -511,15 +511,37 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                 df[col] = df[col].apply(normalize_json)
                 logger.info(f"Normalized column '{col}'")
 
+    # Fix boolean NULLs for verified_contracts and sourcify_matches tables
+    # BigQuery's Parquet export converts NULL booleans to False, so we need to reconstruct NULLs
+    # based on the database integrity constraints
+    if table_name in ['verified_contracts', 'sourcify_matches']:
+        logger.info("Fixing NULL values in boolean columns based on integrity constraints...")
+
+        # Database constraint: if creation_match = false, then creation_metadata_match must be NULL
+        if 'creation_match' in df.columns and 'creation_metadata_match' in df.columns:
+            creation_false_mask = df['creation_match'] == False
+            null_count = creation_false_mask.sum()
+            if null_count > 0:
+                logger.info(f"Setting creation_metadata_match to NULL for {null_count} rows where creation_match=False")
+                df.loc[creation_false_mask, 'creation_metadata_match'] = None
+
+        # Database constraint: if runtime_match = false, then runtime_metadata_match must be NULL
+        if 'runtime_match' in df.columns and 'runtime_metadata_match' in df.columns:
+            runtime_false_mask = df['runtime_match'] == False
+            null_count = runtime_false_mask.sum()
+            if null_count > 0:
+                logger.info(f"Setting runtime_metadata_match to NULL for {null_count} rows where runtime_match=False")
+                df.loc[runtime_false_mask, 'runtime_metadata_match'] = None
+
     # Validate and fix JSON columns for verified_contracts table
     if table_name == 'verified_contracts':
         logger.info("Validating JSON columns for verified_contracts...")
 
-        # DEBUG: Check the problematic row 10078820
+        # DEBUG: Check the problematic row 10078820 after NULL fixes
         if 'id' in df.columns:
             problem_row = df[df['id'] == 10078820]
             if not problem_row.empty:
-                logger.info("=== DEBUG: Found problematic row 10078820 ===")
+                logger.info("=== DEBUG: Row 10078820 after NULL fixes ===")
                 for col in ['creation_match', 'creation_metadata_match', 'runtime_match', 'runtime_metadata_match']:
                     if col in df.columns:
                         val = problem_row[col].iloc[0]
