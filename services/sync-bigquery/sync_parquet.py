@@ -12,6 +12,7 @@ import logging
 import psycopg2
 import requests
 import time
+import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
@@ -430,6 +431,29 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
 
         df[col] = df[col].apply(ensure_bytes_or_none)
 
+    # Normalize JSON columns to strings for tables with JSON validation constraints
+    # This is needed because Parquet may store JSON as either strings OR native Python objects
+    if table_name in ['verified_contracts', 'sourcify_matches']:
+        json_columns = ['creation_values', 'creation_transformations', 'runtime_values', 'runtime_transformations']
+        for col in json_columns:
+            if col in df.columns:
+                logger.info(f"Normalizing JSON column '{col}' to ensure consistent string format...")
+
+                def normalize_json(x):
+                    if pd.isna(x) or x is None:
+                        return None
+                    if isinstance(x, str):
+                        # Already a string - keep as-is
+                        return x
+                    if isinstance(x, (dict, list)):
+                        # Convert Python object to JSON string
+                        return json.dumps(x)
+                    logger.warning(f"Unexpected type {type(x).__name__} in JSON column '{col}', converting to JSON string")
+                    return json.dumps(x)
+
+                df[col] = df[col].apply(normalize_json)
+                logger.info(f"Normalized column '{col}'")
+
     # Validate and fix JSON columns for verified_contracts table
     if table_name == 'verified_contracts':
         logger.info("Validating JSON columns for verified_contracts...")
@@ -439,18 +463,15 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
         for idx, row in df.iterrows():
             # Validate creation_transformations
             if 'creation_transformations' in df.columns and pd.notna(row['creation_transformations']):
-                creation_trans = row['creation_transformations']
-                # Parse if it's a string
-                if isinstance(creation_trans, str):
-                    try:
-                        creation_trans = json.loads(creation_trans)
-                    except json.JSONDecodeError as e:
-                        error_msg = f"Row {idx}: Invalid JSON in creation_transformations: {e}"
-                        logger.error(error_msg)
-                        validation_errors.append(error_msg)
-                        # Set to None to skip this row's validation
-                        df.at[idx, 'creation_transformations'] = None
-                        continue
+                creation_trans_str = row['creation_transformations']
+                try:
+                    creation_trans = json.loads(creation_trans_str)
+                except json.JSONDecodeError as e:
+                    error_msg = f"Row {idx}: Invalid JSON in creation_transformations: {e}\nData: {creation_trans_str[:200]}"
+                    logger.error(error_msg)
+                    validation_errors.append(error_msg)
+                    df.at[idx, 'creation_transformations'] = None
+                    continue
 
                 # Fix: Convert float offsets to integers (pandas/parquet sometimes converts ints to floats)
                 if isinstance(creation_trans, list):
@@ -460,31 +481,28 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                                 trans['offset'] = int(trans['offset'])
                                 fix_count += 1
 
-                    # Update the dataframe with the fixed JSON
-                    df.at[idx, 'creation_transformations'] = json.dumps(creation_trans)
-
+                # Validate structure
                 is_valid, error = validate_creation_transformations(creation_trans)
                 if not is_valid:
                     error_msg = f"Row {idx}: creation_transformations validation failed: {error}\nData: {json.dumps(creation_trans, indent=2)}"
                     logger.error(error_msg)
                     validation_errors.append(error_msg)
-                    # Set to None to skip constraint violation
                     df.at[idx, 'creation_transformations'] = None
+                else:
+                    # Write back the (possibly fixed) JSON
+                    df.at[idx, 'creation_transformations'] = json.dumps(creation_trans)
 
             # Validate runtime_transformations
             if 'runtime_transformations' in df.columns and pd.notna(row['runtime_transformations']):
-                runtime_trans = row['runtime_transformations']
-                # Parse if it's a string
-                if isinstance(runtime_trans, str):
-                    try:
-                        runtime_trans = json.loads(runtime_trans)
-                    except json.JSONDecodeError as e:
-                        error_msg = f"Row {idx}: Invalid JSON in runtime_transformations: {e}"
-                        logger.error(error_msg)
-                        validation_errors.append(error_msg)
-                        # Set to None to skip this row's validation
-                        df.at[idx, 'runtime_transformations'] = None
-                        continue
+                runtime_trans_str = row['runtime_transformations']
+                try:
+                    runtime_trans = json.loads(runtime_trans_str)
+                except json.JSONDecodeError as e:
+                    error_msg = f"Row {idx}: Invalid JSON in runtime_transformations: {e}\nData: {runtime_trans_str[:200]}"
+                    logger.error(error_msg)
+                    validation_errors.append(error_msg)
+                    df.at[idx, 'runtime_transformations'] = None
+                    continue
 
                 # Fix: Convert float offsets to integers (pandas/parquet sometimes converts ints to floats)
                 if isinstance(runtime_trans, list):
@@ -494,16 +512,16 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                                 trans['offset'] = int(trans['offset'])
                                 fix_count += 1
 
-                    # Update the dataframe with the fixed JSON
-                    df.at[idx, 'runtime_transformations'] = json.dumps(runtime_trans)
-
+                # Validate structure
                 is_valid, error = validate_runtime_transformations(runtime_trans)
                 if not is_valid:
                     error_msg = f"Row {idx}: runtime_transformations validation failed: {error}\nData: {json.dumps(runtime_trans, indent=2)}"
                     logger.error(error_msg)
                     validation_errors.append(error_msg)
-                    # Set to None to skip constraint violation
                     df.at[idx, 'runtime_transformations'] = None
+                else:
+                    # Write back the (possibly fixed) JSON
+                    df.at[idx, 'runtime_transformations'] = json.dumps(runtime_trans)
 
         if fix_count > 0:
             logger.info(f"Fixed {fix_count} transformation objects (converted float offsets to integers)")
