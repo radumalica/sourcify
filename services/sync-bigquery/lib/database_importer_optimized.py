@@ -868,15 +868,39 @@ class OptimizedDatabaseImporter:
 
             try:
                 total_imported = 0
+                total_rows = len(df)
                 # Reasonable chunk size to limit memory usage; tuneable
                 chunk_size = 100000
-                logger.info(f"Attempting chunked text COPY fallback with chunk size {chunk_size} rows")
-                for start in range(0, len(df), chunk_size):
-                    end = start + chunk_size
+                num_chunks = (total_rows + chunk_size - 1) // chunk_size
+                
+                logger.info(f"Attempting chunked text COPY fallback: {total_rows:,} rows in {num_chunks} chunks of {chunk_size:,}")
+                
+                fallback_start_time = time.time()
+                for chunk_idx, start in enumerate(range(0, total_rows, chunk_size), 1):
+                    end = min(start + chunk_size, total_rows)
                     chunk = df.iloc[start:end]
-                    logger.info(f"Text COPY fallback: importing rows {start}..{min(end, len(df))} ({len(chunk):,} rows)")
+                    chunk_size_actual = len(chunk)
+                    
+                    logger.info(f"[Chunk {chunk_idx}/{num_chunks}] Processing rows {start:,}..{end:,} ({chunk_size_actual:,} rows)")
+                    
+                    chunk_start = time.time()
                     imported = self._import_using_copy(chunk, table_name, columns)
+                    chunk_time = time.time() - chunk_start
+                    
                     total_imported += imported
+                    progress_pct = (end / total_rows) * 100
+                    
+                    logger.info(
+                        f"[Chunk {chunk_idx}/{num_chunks}] Imported {imported:,} rows in {chunk_time:.2f}s "
+                        f"({imported/chunk_time:.0f} rows/s) | "
+                        f"Total: {total_imported:,}/{total_rows:,} ({progress_pct:.1f}%)"
+                    )
+                
+                total_time = time.time() - fallback_start_time
+                logger.info(
+                    f"Text COPY fallback completed: {total_imported:,} rows imported in {total_time:.2f}s "
+                    f"({total_imported/total_time:.0f} rows/s avg)"
+                )
                 return total_imported
             except Exception as e2:
                 logger.error(f"Text COPY fallback (chunked) failed: {e2}", exc_info=True)
