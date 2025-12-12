@@ -542,10 +542,10 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
             problem_row = df[df['id'] == 10078820]
             if not problem_row.empty:
                 logger.info("=== DEBUG: Row 10078820 after NULL fixes ===")
-                for col in ['creation_match', 'creation_metadata_match', 'runtime_match', 'runtime_metadata_match']:
-                    if col in df.columns:
-                        val = problem_row[col].iloc[0]
-                        logger.info(f"  {col}: value={val}, type={type(val)}, is_none={val is None}, pd.isna={pd.isna(val)}")
+                for col in df.columns:
+                    val = problem_row[col].iloc[0]
+                    val_repr = repr(val)[:100] if val is not None else 'None'
+                    logger.info(f"  {col}: type={type(val).__name__}, is_none={val is None}, value={val_repr}")
 
         validation_errors = []
         fix_count = 0
