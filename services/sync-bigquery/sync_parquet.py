@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from lib import OptimizedDatabaseImporter, IndexStateManager
@@ -281,7 +282,7 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
     # Identify boolean columns that need special handling
     boolean_columns = []
     for i, field in enumerate(parquet_table.schema):
-        if pq.types.is_boolean(field.type):
+        if pa.types.is_boolean(field.type):
             boolean_columns.append(field.name)
 
     if boolean_columns:
