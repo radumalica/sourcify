@@ -327,6 +327,13 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
                 df[col] = pa_col.to_pandas(deduplicate_objects=False)
                 # Now convert to object dtype
                 df[col] = df[col].astype('object')
+                # Debug: Check if NULLs are preserved
+                null_count_after = df[col].isna().sum()
+                logger.info(f"  After conversion: {null_count_after} NULL values in column '{col}'")
+                # Sample some NULL values to verify
+                null_samples = df[df[col].isna()][col].head(3)
+                if len(null_samples) > 0:
+                    logger.info(f"  Sample NULL values: {list(null_samples)}")
             else:
                 # No NULLs, safe to use standard conversion
                 df[col] = df[col].astype('object')
@@ -504,6 +511,17 @@ def import_parquet_file(file_path: str, table_name: str, conn, use_copy: bool = 
     # Validate and fix JSON columns for verified_contracts table
     if table_name == 'verified_contracts':
         logger.info("Validating JSON columns for verified_contracts...")
+
+        # DEBUG: Check the problematic row 10078820
+        if 'id' in df.columns:
+            problem_row = df[df['id'] == 10078820]
+            if not problem_row.empty:
+                logger.info("=== DEBUG: Found problematic row 10078820 ===")
+                for col in ['creation_match', 'creation_metadata_match', 'runtime_match', 'runtime_metadata_match']:
+                    if col in df.columns:
+                        val = problem_row[col].iloc[0]
+                        logger.info(f"  {col}: value={val}, type={type(val)}, is_none={val is None}, pd.isna={pd.isna(val)}")
+
         validation_errors = []
         fix_count = 0
 
