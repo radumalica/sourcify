@@ -62,6 +62,7 @@ export class SignatureDatabase {
             SELECT 1
             FROM ${this.qualify("compiled_contracts_signatures")} ccs
             WHERE ccs.signature_hash_32 = s.signature_hash_32
+            LIMIT 1
           ) THEN true
           ELSE false
         END as has_verified_contract
@@ -82,6 +83,7 @@ export class SignatureDatabase {
             SELECT 1
             FROM ${this.qualify("compiled_contracts_signatures")} ccs
             WHERE ccs.signature_hash_32 = s.signature_hash_32
+            LIMIT 1
           ) THEN true
           ELSE false
         END as has_verified_contract
